@@ -33,6 +33,11 @@ from bccf_constants import (
     SUFFIX_NO_OPTION,
     DEFAULT_FILENAME,
     DEFAULT_DIRECTORY_OUTPUT,
+    DEFAULT_DELIMITER,
+    DEFAULT_PREFIX,
+    DEFAULT_DO_GENERATE_CSV,
+    DEFAULT_DO_SAVE_PROJECT,
+    DEFAULT_MODE_RENDER,
     ID_BCB_EXCLUSION_RULES_RAW,
     ID_BCB_RULE_IF,
     ID_BCB_RULE_TARGET,
@@ -746,19 +751,26 @@ class BrandnerDialog(c4d.gui.GeDialog):
         return True
 
     def _ensure_bcb_defaults(self) -> None:
-        """Backfill render-critical string defaults if the document's stored
-        container is missing them.
+        """Backfill all BCB defaults that could be None in an old document.
 
-        validate_bc_brandner is a no-op in production, and a document whose
-        Brandner container predates a parameter keeps that container as-is, so
-        keys like the filename can come back as None. self.bcb is the live
-        container instance from the document, so setting a default here heals
-        it for the session (and prevents os.path.join(None) in the preview).
+        validate_bc_brandner is a no-op in production, so any parameter
+        missing from the document's stored container stays None. This heals
+        every field that can cause a TypeError/crash if unset.
         """
         if not self.bcb[ID_BCB_FILENAME]:
             self.bcb.SetString(ID_BCB_FILENAME, DEFAULT_FILENAME)
         if not self.bcb[ID_BCB_DIRECTORY_OUTPUT]:
             self.bcb.SetString(ID_BCB_DIRECTORY_OUTPUT, DEFAULT_DIRECTORY_OUTPUT)
+        if not self.bcb[ID_BCB_DELIMITER]:
+            self.bcb.SetString(ID_BCB_DELIMITER, DEFAULT_DELIMITER)
+        if not self.bcb[ID_BCB_PREFIX]:
+            self.bcb.SetString(ID_BCB_PREFIX, DEFAULT_PREFIX)
+        if self.bcb[ID_BCB_DO_GENERATE_CSV] is None:
+            self.bcb.SetBool(ID_BCB_DO_GENERATE_CSV, DEFAULT_DO_GENERATE_CSV)
+        if self.bcb[ID_BCB_DO_SAVE_PROJECT] is None:
+            self.bcb.SetBool(ID_BCB_DO_SAVE_PROJECT, DEFAULT_DO_SAVE_PROJECT)
+        if self.bcb[ID_BCB_MODE_RENDER] is None:
+            self.bcb.SetInt32(ID_BCB_MODE_RENDER, DEFAULT_MODE_RENDER)
 
     def update_combinations(self) -> None:
         """Recompute combos + UI bits after rules change."""
