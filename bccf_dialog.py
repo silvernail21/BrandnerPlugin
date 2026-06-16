@@ -221,32 +221,32 @@ BAKE_FRAME_OFFSET = 1  # start baked combo frames at 1
 
 
 class BrandnerRulesDialog(c4d.gui.GeDialog):
-    """Popup dialog for viewing and editing combo exclusion rules."""
+    """Popup dialog for viewing and editing combo exclusion rules.
 
-    _MAX_ROWS = 20
+    Rules display uses a read-only MultiLineEditText (pure SetString —
+    no HideElement or LayoutChanged needed).  Delete is done via a combo
+    box selection.  The raw text area is always visible for power-user
+    editing.
+    """
 
     # Popup-local UI IDs — independent namespace from the main dialog
-    _ID_GRP_ROWS  = 100
-    _ID_GRP_BLDR  = 101
-    _ID_GRP_ADV   = 102
-
-    _ID_CMB_IF    = 200
-    _ID_CMB_ACT   = 201
-    _ID_CMB_TGT   = 202
-    _ID_TXT_IF    = 203
-    _ID_BTN_AND   = 204
-    _ID_BTN_OR    = 205
-    _ID_BTN_CLR   = 206
-    _ID_BTN_ADD   = 207
-    _ID_BTN_CLOSE = 208
-    _ID_STR_STAT  = 209
-    _ID_STR_RAW   = 210
-    _ID_BTN_RAW   = 211
-
-    # Row IDs: base + row index (0 .. MAX_ROWS-1)
-    _ID_ROW_GRP   = 1000   # group wrapper per row
-    _ID_ROW_TXT   = 1100   # static text label showing rule text
-    _ID_ROW_DEL   = 1200   # Delete button per row
+    _ID_RULES_DISPLAY = 100   # read-only multiline: numbered rule list
+    _ID_CMB_DEL       = 101   # combo: select a rule to delete
+    _ID_BTN_DEL       = 102   # Delete Selected button
+    _ID_GRP_BLDR      = 103   # Add Rule builder group
+    _ID_GRP_ADV       = 104   # Raw text group
+    _ID_CMB_IF        = 200
+    _ID_CMB_ACT       = 201
+    _ID_CMB_TGT       = 202
+    _ID_TXT_IF        = 203
+    _ID_BTN_AND       = 204
+    _ID_BTN_OR        = 205
+    _ID_BTN_CLR       = 206
+    _ID_BTN_ADD       = 207
+    _ID_BTN_CLOSE     = 208
+    _ID_STR_STAT      = 209
+    _ID_STR_RAW       = 210
+    _ID_BTN_RAW       = 211
 
     def __init__(self, parent: "BrandnerDialog") -> None:
         super().__init__()
@@ -261,20 +261,26 @@ class BrandnerRulesDialog(c4d.gui.GeDialog):
     def CreateLayout(self) -> bool:
         self.SetTitle("BC-ComboFlow: Manage Rules")
 
-        # ---- Rules list ----
-        if self.GroupBegin(self._ID_GRP_ROWS, BF_SF, cols=1, title="Rules"):
+        # ---- Current rules (read-only display) ----
+        if self.GroupBegin(NO_ID, BF_SF, cols=1, title="Rules"):
             self.GroupBorder(c4d.BORDER_WITH_TITLE_BOLD)
             self.GroupBorderSpace(5, 5, 5, 5)
-            self.GroupSpace(0, 2)
+            self.GroupSpace(0, 4)
 
-            for i in range(self._MAX_ROWS):
-                if self.GroupBegin(self._ID_ROW_GRP + i, BF_SF, cols=2, rows=1):
-                    self.GroupSpace(4, 2)
-                    self.AddStaticText(self._ID_ROW_TXT + i, BF_SF, name=" ")
-                    self.AddButton(
-                        self._ID_ROW_DEL + i, c4d.BFH_RIGHT, name="Delete", initw=60
-                    )
-                self.GroupEnd()
+            self.AddMultiLineEditText(
+                self._ID_RULES_DISPLAY,
+                BF_SF,
+                inith=90,
+                style=c4d.DR_MULTILINE_READONLY | c4d.DR_MULTILINE_MONOSPACED,
+            )
+
+            # Delete row
+            if self.GroupBegin(NO_ID, BF_SF, cols=3, rows=1):
+                self.GroupSpace(4, 0)
+                self.AddStaticText(NO_ID, c4d.BFH_LEFT, name="Delete:")
+                self.AddComboBox(self._ID_CMB_DEL, BF_SF)
+                self.AddButton(self._ID_BTN_DEL, c4d.BFH_RIGHT, name="Delete Selected")
+            self.GroupEnd()
         self.GroupEnd()
 
         # ---- Add Rule builder ----
@@ -333,11 +339,8 @@ class BrandnerRulesDialog(c4d.gui.GeDialog):
     # ------------------------------------------------------------------
 
     def InitValues(self) -> bool:
-        self._populate_combos()
-        self._refresh_rows(do_layout_change=False)
-        raw = self._parent.bcb.GetString(ID_BCB_EXCLUSION_RULES_RAW, "") or ""
-        self.SetString(self._ID_STR_RAW, raw)
-        self._update_status()
+        self._populate_builder_combos()
+        self._refresh_display()
         return True
 
     # ------------------------------------------------------------------
@@ -345,12 +348,9 @@ class BrandnerRulesDialog(c4d.gui.GeDialog):
     # ------------------------------------------------------------------
 
     def Command(self, id: int, msg: c4d.BaseContainer) -> bool:
-        for i in range(self._MAX_ROWS):
-            if id == self._ID_ROW_DEL + i:
-                self._cmd_delete_rule(i)
-                return True
-
-        if id == self._ID_BTN_AND:
+        if id == self._ID_BTN_DEL:
+            self._cmd_delete_selected()
+        elif id == self._ID_BTN_AND:
             self._exc_add_token(mode="and")
         elif id == self._ID_BTN_OR:
             self._exc_add_token(mode="or")
@@ -381,14 +381,13 @@ class BrandnerRulesDialog(c4d.gui.GeDialog):
         if doc:
             store_bc_brandner(doc, self._parent.bcb)
 
-    def _cmd_delete_rule(self, row_index: int) -> None:
+    def _cmd_delete_selected(self) -> None:
+        sel = self.GetInt32(self._ID_CMB_DEL)
         rules = self._get_rules_list()
-        if row_index < len(rules):
-            del rules[row_index]
+        if 0 <= sel < len(rules):
+            del rules[sel]
             self._save_rules(rules)
-        self.SetString(self._ID_STR_RAW, "\n".join(self._get_rules_list()))
-        self._refresh_rows()
-        self._update_status()
+        self._refresh_display()
 
     def _cmd_add_rule(self) -> None:
         if_expr = self._exc_build_if_expr()
@@ -414,9 +413,7 @@ class BrandnerRulesDialog(c4d.gui.GeDialog):
 
         self._exc_if_groups = []
         self._update_if_preview()
-        self.SetString(self._ID_STR_RAW, "\n".join(self._get_rules_list()))
-        self._refresh_rows()
-        self._update_status()
+        self._refresh_display()
 
     def _cmd_apply_raw(self) -> None:
         raw = self.GetString(self._ID_STR_RAW) or ""
@@ -424,42 +421,49 @@ class BrandnerRulesDialog(c4d.gui.GeDialog):
         doc = c4d.documents.GetActiveDocument()
         if doc:
             store_bc_brandner(doc, self._parent.bcb)
-        self._refresh_rows()
-        self._update_status()
+        self._refresh_display()
 
     # ------------------------------------------------------------------
     # UI update helpers
     # ------------------------------------------------------------------
 
-    def _refresh_rows(self, do_layout_change: bool = True) -> None:
+    def _refresh_display(self) -> None:
+        """Update all display widgets from current BCB state.  No layout tricks."""
         rules = self._get_rules_list()
-        for i in range(self._MAX_ROWS):
-            if i < len(rules):
-                self.HideElement(self._ID_ROW_GRP + i, False)
-                self.SetString(self._ID_ROW_TXT + i, rules[i])
-            else:
-                self.HideElement(self._ID_ROW_GRP + i, True)
-        if do_layout_change:
-            self.LayoutChanged(self._ID_GRP_ROWS)
-            self.LayoutChanged(self._ID_GRP_BLDR)
 
-    def _update_status(self) -> None:
-        rules = self._get_rules_list()
-        n = len(rules)
-        if n == 0:
-            self.SetString(self._ID_STR_STAT, "No rules defined.")
+        # Read-only rules list (numbered)
+        if rules:
+            display = "\n".join(f"{i + 1}.  {r}" for i, r in enumerate(rules))
         else:
-            self.SetString(self._ID_STR_STAT, f"{n} rule{'s' if n != 1 else ''} active.")
+            display = "(no rules defined)"
+        self.SetString(self._ID_RULES_DISPLAY, display)
 
-    def _populate_combos(self) -> None:
+        # Delete combo — repopulate with numbered rules
+        self.FreeChildren(self._ID_CMB_DEL)
+        for i, r in enumerate(rules):
+            label = r if len(r) <= 60 else r[:57] + "..."
+            self.AddChild(self._ID_CMB_DEL, i, f"{i + 1}.  {label}")
+        if rules:
+            self.SetInt32(self._ID_CMB_DEL, 0)
+
+        # Raw text editor
+        self.SetString(self._ID_STR_RAW, "\n".join(rules))
+
+        # Status
+        n = len(rules)
+        self.SetString(
+            self._ID_STR_STAT,
+            "No rules defined." if n == 0 else f"{n} rule{'s' if n != 1 else ''} active.",
+        )
+
+    def _populate_builder_combos(self) -> None:
+        """Populate the IF / ACTION / TARGET builder combos from scene items."""
         items = self._parent.get_exception_items()
         self._exc_item_raw_by_id = {}
-        try:
-            self.FreeChildren(self._ID_CMB_IF)
-            self.FreeChildren(self._ID_CMB_TGT)
-            self.FreeChildren(self._ID_CMB_ACT)
-        except Exception:
-            return
+
+        self.FreeChildren(self._ID_CMB_IF)
+        self.FreeChildren(self._ID_CMB_TGT)
+        self.FreeChildren(self._ID_CMB_ACT)
 
         self.AddChild(self._ID_CMB_ACT, 0, "NEVER")
         self.AddChild(self._ID_CMB_ACT, 1, "REQUIRE")
