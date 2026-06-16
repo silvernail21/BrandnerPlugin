@@ -648,14 +648,20 @@ class BrandnerDialog(c4d.gui.GeDialog):
             self.GroupEnd()
 
             # --- Active rules list (dynamically rebuilt) ---
+            # The scroll viewport must have a FIXED height (BFH_SCALEFIT only,
+            # no BFV_SCALEFIT). With vertical scale-fit it would just grow to
+            # fit every rule and the scrollbar would never engage. The inner
+            # content group packs to the top (BFV_TOP) so it can grow past the
+            # viewport and trigger the auto vertical scrollbar.
             self.AddStaticText(NO_ID, BF_L, name="Active rules:")
             if self.ScrollGroupBegin(
                 ID_GRP_RULES_SCROLL,
-                BF_SFSF,
+                BF_SF,
                 c4d.SCROLLGROUP_VERT | c4d.SCROLLGROUP_AUTOVERT,
-                inith=90,
+                initw=0,
+                inith=110,
             ):
-                if self.GroupBegin(ID_GRP_RULES_LIST, BF_SFSF, cols=1):
+                if self.GroupBegin(ID_GRP_RULES_LIST, BF_SFT, cols=1):
                     self.GroupSpace(0, 2)
                     # Contents filled in rebuild_rules_list().
                     self.AddStaticText(
