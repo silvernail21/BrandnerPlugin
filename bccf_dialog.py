@@ -1954,6 +1954,8 @@ class BrandnerDialog(c4d.gui.GeDialog):
     # ------------------------------------------------------------------
 
     def CoreMessage(self, id, msg):
+        if not self.IsOpen():
+            return True
         if id == c4d.EVMSG_CHANGE:
             self.cmsg_change()
         elif id == PLUGIN_ID_BRANDNER:
@@ -2221,6 +2223,10 @@ class BrandnerDialog(c4d.gui.GeDialog):
         self.enable_render_buttons()
         self.rebuild_rules_list()
         self._apply_advanced_visibility()
+        # LayoutChanged(ID_GRP_COMPONENT) is needed to flush pending layout
+        # changes in this C4D build. Without it, HideElement + LayoutChanged
+        # on the rules list does not take effect until the next Refresh.
+        self.layout_changed_components()
 
     def cmd_add_rule(self) -> None:
         if_tok = self._exc_get_selected_if_token()
