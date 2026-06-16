@@ -99,8 +99,7 @@ class CommandDataBrandner(c4d.plugins.CommandData):
     def Execute(self, doc):
         global g_dialog
 
-        is_new = self.dialog is None
-        if is_new:
+        if self.dialog is None:
             self.dialog = BrandnerDialog()
         g_dialog = self.dialog
 
@@ -110,10 +109,6 @@ class CommandDataBrandner(c4d.plugins.CommandData):
             defaultw=400, defaulth=200)
         if is_open:
             self.dialog.layout_changed_components()
-            if not is_new:
-                # Re-show of an existing dialog: C4D calls CreateLayout/InitValues
-                # but our scene cache and bcb may be stale — force a full refresh.
-                self.dialog.cmd_refresh()
         return is_open
 
     def RestoreLayout(self, sec_ref):
