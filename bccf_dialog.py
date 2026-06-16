@@ -125,6 +125,7 @@ ID_GRP_RULES_ADVANCED = 2401  # collapsible group with the raw-text editor
 ID_BTN_RULES_CLEAR    = 2402  # "Clear all rules"
 ID_BTN_RULES_ADVANCED = 2403  # toggle advanced text editor
 ID_STR_RULES_EMPTY    = 2404  # "No rules yet" placeholder
+ID_GRP_RULES_SCROLL   = 2405  # scroll container for the active-rules list
 
 # Reserved range for per-rule delete buttons (one per active rule line).
 # Button id = ID_RULE_DELETE_BASE + index. Keep the range generous.
@@ -649,7 +650,7 @@ class BrandnerDialog(c4d.gui.GeDialog):
             # --- Active rules list (dynamically rebuilt) ---
             self.AddStaticText(NO_ID, BF_L, name="Active rules:")
             if self.ScrollGroupBegin(
-                NO_ID,
+                ID_GRP_RULES_SCROLL,
                 BF_SFSF,
                 c4d.SCROLLGROUP_VERT | c4d.SCROLLGROUP_AUTOVERT,
                 inith=90,
@@ -2108,6 +2109,10 @@ class BrandnerDialog(c4d.gui.GeDialog):
 
         try:
             self.LayoutChanged(ID_GRP_RULES_LIST)
+        except Exception:
+            pass
+        try:
+            self.LayoutChanged(ID_GRP_RULES_SCROLL)
         except Exception:
             pass
 
