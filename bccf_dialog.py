@@ -2193,16 +2193,16 @@ class BrandnerDialog(c4d.gui.GeDialog):
                     )
                 self.GroupEnd()
 
-        # Relayout the *outer* Exceptions group, not just the flushed inner
-        # group. In this C4D build LayoutChanged on the inner list / scroll
-        # group alone does not repaint — the list only refreshed on a full
-        # reopen. Relaying out ID_GRP_EXCEPTIONS is the same call that makes
-        # the Advanced-text toggle work, so it reliably repaints here too.
-        for _gid in (ID_GRP_RULES_LIST, ID_GRP_RULES_SCROLL, ID_GRP_EXCEPTIONS):
-            try:
-                self.LayoutChanged(_gid)
-            except Exception:
-                pass
+        # Only relayout the inner list group. Calling LayoutChanged on the
+        # outer ID_GRP_EXCEPTIONS from here causes C4D to re-render that group
+        # from its CreateLayout skeleton, which puts the static placeholder
+        # back into ID_GRP_RULES_LIST and wipes the dynamic rows.
+        # The caller is responsible for triggering the outer relayout
+        # (via _apply_advanced_visibility) after this method returns.
+        try:
+            self.LayoutChanged(ID_GRP_RULES_LIST)
+        except Exception:
+            pass
 
     def _persist_rules(self) -> None:
         """Persist current rules to the document so refresh/reopen keeps them."""
@@ -2211,12 +2211,27 @@ class BrandnerDialog(c4d.gui.GeDialog):
             store_bc_brandner(doc, self.bcb)
 
     def _apply_rules_raw(self, rules_raw: str) -> None:
-        """Write rules back to UI + BCB + document and refresh dependent views."""
+        """Write rules back to UI + BCB + document and refresh dependent views.
+
+        Deliberately skips update_file_structure_preview: that clones the
+        entire scene and freezes the UI thread when called from a fast rule
+        add/delete path.  The preview is still updated on Refresh.
+        """
         self.SetString(ID_BCB_EXCLUSION_RULES_RAW, rules_raw)
         self.bcb.SetString(ID_BCB_EXCLUSION_RULES_RAW, rules_raw)
         self._persist_rules()
-        self.update_combinations()
+        # Recompute valid combinations (fast — just filter the Cartesian product).
+        self._combos_dirty = True
+        self.ensure_combinations()
+        # Update the combo count label and render-button text.
+        self.update_component_combo_boxes()
+        self.enable_render_buttons()
+        # Rebuild the rule sentences list, then relayout the outer group via
+        # _apply_advanced_visibility — the same call that makes the Advanced
+        # toggle work.  Calling LayoutChanged(ID_GRP_EXCEPTIONS) from inside
+        # rebuild_rules_list itself wipes the dynamic rows (see comment there).
         self.rebuild_rules_list()
+        self._apply_advanced_visibility()
 
     def cmd_add_rule(self) -> None:
         if_tok = self._exc_get_selected_if_token()
