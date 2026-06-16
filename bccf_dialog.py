@@ -617,19 +617,35 @@ class BrandnerDialog(c4d.gui.GeDialog):
             self.AddStaticText(
                 NO_ID,
                 BF_L,
-                name="Build a rule: pick IF item → NEVER or REQUIRE → target, then Add.",
+                name="Build IF: pick item, use + AND / + OR to combine, then set action + target.",
             )
 
-            # Single builder row: IF | Action | Target | Add button
+            # IF picker + AND / OR / Clear
             if self.GroupBegin(NO_ID, BF_SF, cols=4, rows=1):
                 self.GroupSpace(4, 0)
                 self.AddComboBox(ID_BCB_RULE_IF, BF_SF)
+                self.AddButton(ID_BCB_RULE_ADD_AND, BF_L, name="+ AND")
+                self.AddButton(ID_BCB_RULE_ADD_OR, BF_L, name="+ OR")
+                self.AddButton(ID_BCB_RULE_CLEAR_IF, BF_L, name="Clear IF")
+            self.GroupEnd()
+
+            # IF preview (read-only)
+            if self.GroupBegin(NO_ID, BF_SF, cols=2, rows=1):
+                self.GroupSpace(4, 0)
+                self.AddStaticText(NO_ID, BF_L, name="IF:")
+                self.AddEditText(ID_TXT_RULE_IF_PREVIEW, BF_SF)
+                self.Enable(ID_TXT_RULE_IF_PREVIEW, False)
+            self.GroupEnd()
+
+            # Action + Target + Add Rule
+            if self.GroupBegin(NO_ID, BF_SF, cols=3, rows=1):
+                self.GroupSpace(4, 0)
                 self.AddComboBox(ID_BCB_RULE_ACTION, BF_SF)
                 self.AddComboBox(ID_BCB_RULE_TARGET, BF_SF)
                 self.AddButton(ID_BCB_RULE_ADD, BF_L, name="+ Add Rule")
             self.GroupEnd()
 
-            # Raw rules editor — the source of truth; users can edit directly
+            # Raw rules editor — source of truth; edit/delete rules directly here
             self.AddMultiLineEditText(
                 ID_BCB_EXCLUSION_RULES_RAW,
                 BF_SFSF,
@@ -1289,22 +1305,63 @@ class BrandnerDialog(c4d.gui.GeDialog):
         elif id in IDS_PARAMETERS:
             self.cmd_set_ui_param(id)
 
-        # Exceptions UI
-        if id == ID_BCB_RULE_ADD:
-            if_tok = self._exc_get_selected_if_token()
-            target = self._exc_get_selected_target_token()
-            if not if_tok or not target or if_tok == target:
+        # Exceptions — AND / OR / Clear IF builder
+        if id in (ID_BCB_RULE_ADD_AND, ID_BCB_RULE_ADD_OR, ID_BCB_RULE_CLEAR_IF):
+            if not hasattr(self, "_exc_if_groups"):
+                self._exc_if_groups = []
+
+            if id == ID_BCB_RULE_CLEAR_IF:
+                self._exc_if_groups = []
+                self._exc_update_if_preview()
                 return True
+
+            tok = self._exc_get_selected_if_token()
+            if not tok:
+                return True
+
+            if id == ID_BCB_RULE_ADD_AND:
+                self._exc_if_groups.append([tok])
+            else:  # ADD_OR
+                if not self._exc_if_groups:
+                    self._exc_if_groups = [[tok]]
+                elif tok not in self._exc_if_groups[-1]:
+                    self._exc_if_groups[-1].append(tok)
+
+            self._exc_update_if_preview()
+            return True
+
+        # Exceptions — Add Rule button
+        if id == ID_BCB_RULE_ADD:
+            if not hasattr(self, "_exc_if_groups"):
+                self._exc_if_groups = []
+
+            # Use builder state if available, otherwise fall back to the IF combo selection
+            if_expr = self._exc_build_if_expr()
+            if not if_expr:
+                tok = self._exc_get_selected_if_token()
+                if tok:
+                    self._exc_if_groups = [[tok]]
+                    if_expr = tok
+
+            target = self._exc_get_selected_target_token()
+            if not if_expr or not target or if_expr.strip() == target.strip():
+                return True
+
             action_id = self.GetInt32(ID_BCB_RULE_ACTION)
             action = "REQUIRE" if action_id == 1 else "NEVER"
-            new_line = f"{if_tok} -> {action} {target}"
+            new_line = f"{if_expr} -> {action} {target}"
             rules_raw = self.GetString(ID_BCB_EXCLUSION_RULES_RAW) or ""
             rules_raw = (rules_raw.rstrip() + "\n" + new_line).strip() if rules_raw.strip() else new_line
+
             self.SetString(ID_BCB_EXCLUSION_RULES_RAW, rules_raw)
             self.bcb.SetString(ID_BCB_EXCLUSION_RULES_RAW, rules_raw)
             doc = c4d.documents.GetActiveDocument()
             if doc:
                 store_bc_brandner(doc, self.bcb)
+
+            # Reset builder state after successful add
+            self._exc_if_groups = []
+            self._exc_update_if_preview()
             self._update_after_rules_change()
             return True
 
