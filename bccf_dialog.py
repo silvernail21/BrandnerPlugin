@@ -119,6 +119,7 @@ ID_TXT_TOKEN_HELP_TT = 2302
 
 # --- Exceptions v2 UI -------------------------------------------------
 # Plain-language rule list + advanced text editor.
+ID_GRP_EXCEPTIONS     = 2399  # outer Exceptions group (for reflow on toggle)
 ID_GRP_RULES_LIST     = 2400  # dynamic flush group holding one row per rule
 ID_GRP_RULES_ADVANCED = 2401  # collapsible group with the raw-text editor
 ID_BTN_RULES_CLEAR    = 2402  # "Clear all rules"
@@ -624,7 +625,7 @@ class BrandnerDialog(c4d.gui.GeDialog):
         delete button. The AND/OR text grammar lives behind 'Advanced text...'.
         """
         title = "Exceptions"
-        if self.GroupBegin(NO_ID, BF_SFSF, cols=1, title=title):
+        if self.GroupBegin(ID_GRP_EXCEPTIONS, BF_SFSF, cols=1, title=title):
             self.GroupBorder(c4d.BORDER_WITH_TITLE_BOLD)
             self.GroupBorderSpace(10, 5, 10, 10)
             self.GroupSpace(0, 8)
@@ -645,9 +646,6 @@ class BrandnerDialog(c4d.gui.GeDialog):
                 self.AddButton(ID_BCB_RULE_ADD, BF_L, name="+ Add Rule")
             self.GroupEnd()
 
-            # Validation / status feedback for the add row
-            self.AddStaticText(ID_STR_RULE_STATUS, BF_SF, name=" ")
-
             # --- Active rules list (dynamically rebuilt) ---
             self.AddStaticText(NO_ID, BF_L, name="Active rules:")
             if self.ScrollGroupBegin(
@@ -664,6 +662,9 @@ class BrandnerDialog(c4d.gui.GeDialog):
                     )
                 self.GroupEnd()
             self.GroupEnd()  # scroll
+
+            # Validation / exclusion-summary feedback (below the list)
+            self.AddStaticText(ID_STR_RULE_STATUS, BF_SF, name=" ")
 
             # --- Footer buttons ---
             if self.GroupBegin(NO_ID, BF_SF, cols=2, rows=1):
@@ -1900,10 +1901,12 @@ class BrandnerDialog(c4d.gui.GeDialog):
         """
         Build (label, raw_token) pairs for the Exceptions rule builder.
 
-        Labels are user-friendly and grouped:
-          - VAR: <Variable Name> / <Option Name>
-          - CAM: <Camera/View Name>   (includes Redshift cameras or any non-null objects under BR_CAMERAS)
-          - CONST: <Group Name>       (direct children under BR_CONSTANTS only)
+        Labels are front-loaded with the item's own name (the most identifying
+        text) so they stay readable in a narrow combo box, with a short context
+        suffix:
+          - <Option Name> (<Variable Name>)
+          - <Camera/View Name> [view]
+          - <Group Name> [const]
 
         Raw tokens are the *exact names* used for matching in combos.
         """
@@ -1911,9 +1914,10 @@ class BrandnerDialog(c4d.gui.GeDialog):
         if doc is None:
             return []
 
-        items: List[Tuple[str, str]] = []
+        # (group, label, raw): group orders Variables -> Views -> Constants.
+        items: List[Tuple[int, str, str]] = []
 
-        # ---- Variables: include option object names, labeled with their variable group ----
+        # ---- Variables: option names, suffixed with their variable group ----
         null_vars = doc.SearchObject(BR_VARIABLES)
         if null_vars:
             var = null_vars.GetDown()
@@ -1922,8 +1926,9 @@ class BrandnerDialog(c4d.gui.GeDialog):
 
                 def walk_opts(op: c4d.BaseObject):
                     while op:
-                        # options can be nested; include every non-null object name as a token
-                        items.append((f"VAR: {var_name} / {op.GetName()}", op.GetName()))
+                        # options can be nested; include every object as a token
+                        name = op.GetName()
+                        items.append((0, f"{name}  ({var_name})", name))
                         walk_opts(op.GetDown())
                         op = op.GetNext()
 
@@ -1932,45 +1937,36 @@ class BrandnerDialog(c4d.gui.GeDialog):
                     walk_opts(first_opt)
                 var = var.GetNext()
 
-        # ---- Cameras/Views: include any non-null objects under BR_CAMERAS ----
+        # ---- Cameras/Views: any non-null objects under BR_CAMERAS ----
         null_cams = doc.SearchObject(BR_CAMERAS)
         if null_cams:
             def walk_views(op: c4d.BaseObject):
                 while op:
-                    # exclude grouping nulls; include any actual object (Redshift camera, standard camera, etc.)
                     if op.GetType() != c4d.Onull:
-                        items.append((f"CAM: {op.GetName()}", op.GetName()))
+                        name = op.GetName()
+                        items.append((1, f"{name}  [view]", name))
                     walk_views(op.GetDown())
                     op = op.GetNext()
             walk_views(null_cams.GetDown())
 
-        # ---- Constants: include only direct children of BR_CONSTANTS as group tokens ----
+        # ---- Constants: direct children of BR_CONSTANTS as group tokens ----
         null_consts = doc.SearchObject(BR_CONSTANTS)
         if null_consts:
             c = null_consts.GetDown()
             while c:
-                items.append((f"CONST: {c.GetName()}", c.GetName()))
+                name = c.GetName()
+                items.append((2, f"{name}  [const]", name))
                 c = c.GetNext()
 
-        # sort by group (VAR -> CAM -> CONST) then label
-        def sort_key(it: Tuple[str, str]):
-            label, _ = it
-            if label.startswith("VAR:"):
-                g = 0
-            elif label.startswith("CAM:"):
-                g = 1
-            else:
-                g = 2
-            return (g, label.lower())
-
-        # Deduplicate by label+raw pair (keep stable)
+        # Sort by group, then by label; dedupe on (label, raw).
         seen = set()
         out: List[Tuple[str, str]] = []
-        for it in sorted(items, key=sort_key):
-            if it in seen:
+        for _group, label, raw in sorted(items, key=lambda it: (it[0], it[1].lower())):
+            key = (label, raw)
+            if key in seen:
                 continue
-            seen.add(it)
-            out.append(it)
+            seen.add(key)
+            out.append((label, raw))
 
         return out
 
@@ -2017,10 +2013,17 @@ class BrandnerDialog(c4d.gui.GeDialog):
             self.AddChild(ID_BCB_RULE_IF, cid, label)
             self.AddChild(ID_BCB_RULE_TARGET, cid, label)
 
-        # Set defaults if any items exist
+        # Set defaults if any items exist. Default the target to a *different*
+        # item than the IF picker (prefer the first View) so the builder doesn't
+        # open in an invalid same-item / same-variable state.
         if items:
             self.SetInt32(ID_BCB_RULE_IF, base_id)
-            self.SetInt32(ID_BCB_RULE_TARGET, base_id)
+            target_id = base_id + 1 if len(items) > 1 else base_id
+            for i, (label, _raw) in enumerate(items):
+                if "[view]" in label:
+                    target_id = base_id + i
+                    break
+            self.SetInt32(ID_BCB_RULE_TARGET, target_id)
 
     def _exc_get_selected_if_token(self) -> Optional[str]:
         sel_id = self.GetInt32(ID_BCB_RULE_IF)
@@ -2097,10 +2100,10 @@ class BrandnerDialog(c4d.gui.GeDialog):
                 self._rule_row_line_idx.append(line_idx)
                 if self.GroupBegin(NO_ID, BF_SF, cols=2, rows=1):
                     self.GroupSpace(8, 0)
-                    self.AddButton(
-                        ID_RULE_DELETE_BASE + row, BF_L, name="X", initw=24
-                    )
                     self.AddStaticText(NO_ID, BF_SF, name=sentence)
+                    self.AddButton(
+                        ID_RULE_DELETE_BASE + row, BF_R, name="Delete",
+                    )
                 self.GroupEnd()
 
         try:
@@ -2198,8 +2201,10 @@ class BrandnerDialog(c4d.gui.GeDialog):
             ID_BTN_RULES_ADVANCED,
             "Hide advanced text" if show else "Advanced text...",
         )
+        # Reflow the *outer* Exceptions group; calling LayoutChanged on the
+        # group that was just hidden does not reliably trigger a re-layout.
         try:
-            self.LayoutChanged(ID_GRP_RULES_ADVANCED)
+            self.LayoutChanged(ID_GRP_EXCEPTIONS)
         except Exception:
             pass
 
