@@ -31,6 +31,8 @@ from bccf_constants import (
     PLUGIN_NAME_BRANDNER,
     PLUGIN_VERSION,
     SUFFIX_NO_OPTION,
+    DEFAULT_FILENAME,
+    DEFAULT_DIRECTORY_OUTPUT,
     ID_BCB_EXCLUSION_RULES_RAW,
     ID_BCB_RULE_IF,
     ID_BCB_RULE_TARGET,
@@ -713,6 +715,7 @@ class BrandnerDialog(c4d.gui.GeDialog):
             return True
 
         validate_bc_brandner(self.bcb, is_dev_env=False)
+        self._ensure_bcb_defaults()
 
         self.SetString(ID_STR_PRODUCT_NAME, self.bcb[ID_BCB_PRODUCT_NAME] or "")
         self.SetString(ID_STR_PREFIX, self.bcb[ID_BCB_PREFIX] or "")
@@ -741,6 +744,21 @@ class BrandnerDialog(c4d.gui.GeDialog):
         self._apply_advanced_visibility()
 
         return True
+
+    def _ensure_bcb_defaults(self) -> None:
+        """Backfill render-critical string defaults if the document's stored
+        container is missing them.
+
+        validate_bc_brandner is a no-op in production, and a document whose
+        Brandner container predates a parameter keeps that container as-is, so
+        keys like the filename can come back as None. self.bcb is the live
+        container instance from the document, so setting a default here heals
+        it for the session (and prevents os.path.join(None) in the preview).
+        """
+        if not self.bcb[ID_BCB_FILENAME]:
+            self.bcb.SetString(ID_BCB_FILENAME, DEFAULT_FILENAME)
+        if not self.bcb[ID_BCB_DIRECTORY_OUTPUT]:
+            self.bcb.SetString(ID_BCB_DIRECTORY_OUTPUT, DEFAULT_DIRECTORY_OUTPUT)
 
     def update_combinations(self) -> None:
         """Recompute combos + UI bits after rules change."""
@@ -906,6 +924,26 @@ class BrandnerDialog(c4d.gui.GeDialog):
         self.SetInt32(ID_CMB_MODE_RENDER, self.bcb[ID_BCB_MODE_RENDER])
 
     def update_file_structure_preview(self) -> None:
+        """Refresh the preview, but never let a preview error break the caller.
+
+        The preview clones the scene, sets render data and converts tokens —
+        a lot of moving parts. Rule add/delete and the combo count must keep
+        working even if any of that fails, so failures are logged and shown
+        in the preview box instead of propagating.
+        """
+        try:
+            self._build_file_structure_preview()
+        except Exception:
+            logging.exception("File structure preview failed")
+            try:
+                self.SetString(
+                    ID_FILE_STRUCTURE_LIST,
+                    "Preview unavailable (check output directory / filename).",
+                )
+            except Exception:
+                pass
+
+    def _build_file_structure_preview(self) -> None:
         """
         Show example output file names based on valid combinations.
 
@@ -1164,6 +1202,15 @@ class BrandnerDialog(c4d.gui.GeDialog):
         dir_doc = c4d.documents.GetActiveDocument().GetDocumentPath() or doc.GetDocumentPath()
         dir_output = resolve_output_directory(dir_doc, self.bcb[ID_BCB_DIRECTORY_OUTPUT])
         filename = self.bcb[ID_BCB_FILENAME]
+
+        # A document whose stored container predates a parameter (or was never
+        # fully initialised) can return None here — validate_bc_brandner is a
+        # no-op in production, so defaults are not guaranteed. Coerce to "" so
+        # os.path.join never raises and the preview/render degrades gracefully.
+        if dir_output is None:
+            dir_output = ""
+        if filename is None:
+            filename = ""
 
         rd[c4d.RDATA_PATH] = os.path.join(dir_output, filename)
         rd[c4d.RDATA_FORMAT] = c4d.FILTER_PNG
