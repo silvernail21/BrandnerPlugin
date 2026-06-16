@@ -127,12 +127,18 @@ ID_TXT_TOKEN_HELP_TT = 2302
 # --- Exceptions v2 UI -------------------------------------------------
 # Plain-language rule list + advanced text editor.
 ID_GRP_EXCEPTIONS     = 2399  # outer Exceptions group (for reflow on toggle)
-ID_GRP_RULES_LIST     = 2400  # dynamic flush group holding one row per rule
+ID_GRP_RULES_LIST     = 2400  # group holding pre-allocated rule rows
 ID_GRP_RULES_ADVANCED = 2401  # collapsible group with the raw-text editor
 ID_BTN_RULES_CLEAR    = 2402  # "Clear all rules"
 ID_BTN_RULES_ADVANCED = 2403  # toggle advanced text editor
 ID_STR_RULES_EMPTY    = 2404  # "No rules yet" placeholder
 ID_GRP_RULES_SCROLL   = 2405  # scroll container for the active-rules list
+
+# Pre-allocated rule rows (set in CreateLayout, shown/hidden via HideElement).
+# Avoids LayoutFlushGroup entirely — HideElement works from any context.
+MAX_RULE_ROWS     = 20
+ID_RULE_ROW_BASE  = 3000   # wrapper group per row:  3000-3019
+ID_RULE_TEXT_BASE = 3100   # static text label per row: 3100-3119
 
 # Reserved range for per-rule delete buttons (one per active rule line).
 # Button id = ID_RULE_DELETE_BASE + index. Keep the range generous.
@@ -654,15 +660,14 @@ class BrandnerDialog(c4d.gui.GeDialog):
                 self.AddButton(ID_BCB_RULE_ADD, BF_L, name="+ Add Rule")
             self.GroupEnd()
 
-            # --- Active rules list (dynamically rebuilt) ---
-            # A C4D group sizes to fit its children, so a bare scroll group
-            # just keeps growing to fit every rule and never scrolls. The fix
-            # is a FIXED-HEIGHT wrapper group (BFH_SCALEFIT only, no BFV) with
-            # an inith; the scroll group fills that bounded box and clips its
-            # content, and the inner list (BFV_TOP) overflows to trigger the
-            # auto vertical scrollbar.
+            # --- Active rules list ---
+            # Rows are PRE-ALLOCATED here in CreateLayout and shown/hidden via
+            # HideElement + LayoutChanged(ID_GRP_RULES_LIST). This avoids
+            # LayoutFlushGroup entirely — that call does not reliably update
+            # the display when invoked outside C4D's own InitValues lifecycle.
+            # HideElement works from any context (same as the Advanced toggle).
             self.AddStaticText(NO_ID, BF_L, name="Active rules:")
-            if self.GroupBegin(NO_ID, BF_SF, cols=1, rows=1, inith=110):
+            if self.GroupBegin(NO_ID, BF_SF, cols=1, rows=1, inith=120):
                 if self.ScrollGroupBegin(
                     ID_GRP_RULES_SCROLL,
                     BF_SFSF,
@@ -670,10 +675,21 @@ class BrandnerDialog(c4d.gui.GeDialog):
                 ):
                     if self.GroupBegin(ID_GRP_RULES_LIST, BF_SFT, cols=1):
                         self.GroupSpace(0, 2)
-                        # Contents filled in rebuild_rules_list().
                         self.AddStaticText(
                             ID_STR_RULES_EMPTY, BF_L, name="No rules yet."
                         )
+                        for _i in range(MAX_RULE_ROWS):
+                            if self.GroupBegin(
+                                ID_RULE_ROW_BASE + _i, BF_SF, cols=2, rows=1
+                            ):
+                                self.GroupSpace(8, 0)
+                                self.AddStaticText(
+                                    ID_RULE_TEXT_BASE + _i, BF_SF, name=""
+                                )
+                                self.AddButton(
+                                    ID_RULE_DELETE_BASE + _i, BF_R, name="Delete"
+                                )
+                            self.GroupEnd()
                     self.GroupEnd()
                 self.GroupEnd()  # scroll
             self.GroupEnd()  # fixed-height wrapper
@@ -1413,26 +1429,10 @@ class BrandnerDialog(c4d.gui.GeDialog):
             self._apply_rules_raw(self.GetString(ID_BCB_EXCLUSION_RULES_RAW))
             return True
         if ID_RULE_DELETE_BASE <= id <= ID_RULE_DELETE_MAX:
-            # Split the delete into two phases to avoid a crash:
-            # Phase 1 (here, in Command): mutate the data only — no
-            #   LayoutFlushGroup, so the Delete button being dispatched
-            #   is not freed while still on the call stack.
-            # Phase 2 (Timer, 40 ms later): call InitValues() to repaint
-            #   the rules list and all dependent UI.
-            row = id - ID_RULE_DELETE_BASE
-            line_indices = getattr(self, "_rule_row_line_idx", [])
-            if 0 <= row < len(line_indices):
-                line_idx = line_indices[row]
-                lines = (self.GetString(ID_BCB_EXCLUSION_RULES_RAW) or "").splitlines()
-                if 0 <= line_idx < len(lines):
-                    del lines[line_idx]
-                    rules_raw = "\n".join(lines)
-                    self.SetString(ID_BCB_EXCLUSION_RULES_RAW, rules_raw)
-                    self.bcb.SetString(ID_BCB_EXCLUSION_RULES_RAW, rules_raw)
-                    self._persist_rules()
-                    self._combos_dirty = True
-                    self._pending_delete_refresh = True
-                    self.SetTimer(40)
+            # Inline delete is safe: rebuild_rules_list now uses HideElement
+            # (not LayoutFlushGroup), so the Delete button's gadget is never
+            # freed while it is still on the call stack.
+            self.cmd_delete_rule(id - ID_RULE_DELETE_BASE)
             return True
 
         return True
@@ -1961,17 +1961,7 @@ class BrandnerDialog(c4d.gui.GeDialog):
         return True
 
     def Timer(self, msg) -> None:
-        """Deferred UI refresh after a Delete-rule Command dispatch.
-
-        The data change (BCB mutation + persist) already happened inline in
-        Command. InitValues() is called here — outside the button's dispatch —
-        so LayoutFlushGroup(ID_GRP_RULES_LIST) runs safely.
-        """
-        self.SetTimer(0)  # one-shot: cancel immediately
-        if not getattr(self, "_pending_delete_refresh", False):
-            return
-        self._pending_delete_refresh = False
-        self.InitValues()
+        self.SetTimer(0)
 
     def cmsg_change(self) -> None:
         doc_current = c4d.documents.GetActiveDocument()
@@ -2163,50 +2153,52 @@ class BrandnerDialog(c4d.gui.GeDialog):
         return f"When {if_text}, never render with {tgt_text}."
 
     def rebuild_rules_list(self) -> None:
-        """Rebuild the dynamic 'Active rules' list, one sentence + delete button per rule."""
+        """Update the pre-allocated rule rows via SetString + HideElement.
+
+        No LayoutFlushGroup is used. All MAX_RULE_ROWS slots were created in
+        CreateLayout; we simply show the occupied ones and hide the rest.
+        HideElement works reliably from any callback context (Command, Timer,
+        InitValues) — unlike LayoutFlushGroup which only takes effect during
+        C4D's own InitValues lifecycle.
+        """
         raw = self.bcb.GetString(ID_BCB_EXCLUSION_RULES_RAW, "")
         lines = raw.splitlines()
 
-        # row index -> source line index in `lines` (for deletion)
         self._rule_row_line_idx: List[int] = []
-        rows: List[Tuple[int, str]] = []
+        row = 0
         for line_idx, line in enumerate(lines):
             stripped = line.strip()
             if not stripped or stripped.startswith("#"):
                 continue
+            if row >= MAX_RULE_ROWS:
+                break
             parsed = parse_exclusion_rules(line)
-            if parsed:
-                sentence = self._rule_to_sentence(parsed[0])
-            else:
-                sentence = f"[unrecognized] {stripped}"
-            rows.append((line_idx, sentence))
+            sentence = (
+                self._rule_to_sentence(parsed[0]) if parsed
+                else f"[unrecognized] {stripped}"
+            )
+            self._rule_row_line_idx.append(line_idx)
+            try:
+                self.SetString(ID_RULE_TEXT_BASE + row, sentence)
+                self.HideElement(ID_RULE_ROW_BASE + row, False)
+            except Exception:
+                pass
+            row += 1
 
+        # Hide unused rows.
+        for i in range(row, MAX_RULE_ROWS):
+            try:
+                self.HideElement(ID_RULE_ROW_BASE + i, True)
+            except Exception:
+                pass
+
+        # Show "No rules yet." only when the list is empty.
         try:
-            self.LayoutFlushGroup(ID_GRP_RULES_LIST)
+            self.HideElement(ID_STR_RULES_EMPTY, row > 0)
         except Exception:
-            return
+            pass
 
-        if not rows:
-            self.AddStaticText(ID_STR_RULES_EMPTY, BF_L, name="No rules yet.")
-        else:
-            for row, (line_idx, sentence) in enumerate(rows):
-                if row > (ID_RULE_DELETE_MAX - ID_RULE_DELETE_BASE):
-                    break
-                self._rule_row_line_idx.append(line_idx)
-                if self.GroupBegin(NO_ID, BF_SF, cols=2, rows=1):
-                    self.GroupSpace(8, 0)
-                    self.AddStaticText(NO_ID, BF_SF, name=sentence)
-                    self.AddButton(
-                        ID_RULE_DELETE_BASE + row, BF_R, name="Delete",
-                    )
-                self.GroupEnd()
-
-        # Only relayout the inner list group. Calling LayoutChanged on the
-        # outer ID_GRP_EXCEPTIONS from here causes C4D to re-render that group
-        # from its CreateLayout skeleton, which puts the static placeholder
-        # back into ID_GRP_RULES_LIST and wipes the dynamic rows.
-        # The caller is responsible for triggering the outer relayout
-        # (via _apply_advanced_visibility) after this method returns.
+        # Relayout the list group so hidden rows collapse.
         try:
             self.LayoutChanged(ID_GRP_RULES_LIST)
         except Exception:
@@ -2219,17 +2211,16 @@ class BrandnerDialog(c4d.gui.GeDialog):
             store_bc_brandner(doc, self.bcb)
 
     def _apply_rules_raw(self, rules_raw: str) -> None:
-        """Write rules back to UI + BCB + document and refresh all dependent views.
-
-        Calls InitValues() — the same full-refresh path that the Refresh button
-        uses — because partial LayoutFlushGroup/LayoutChanged sequences do not
-        reliably update the rules list in this C4D build.
-        """
+        """Write rules back to UI + BCB + document and refresh dependent views."""
         self.SetString(ID_BCB_EXCLUSION_RULES_RAW, rules_raw)
         self.bcb.SetString(ID_BCB_EXCLUSION_RULES_RAW, rules_raw)
         self._persist_rules()
         self._combos_dirty = True
-        self.InitValues()
+        self.ensure_combinations()
+        self.update_component_combo_boxes()
+        self.enable_render_buttons()
+        self.rebuild_rules_list()
+        self._apply_advanced_visibility()
 
     def cmd_add_rule(self) -> None:
         if_tok = self._exc_get_selected_if_token()
