@@ -127,11 +127,6 @@ ID_BTN_RULES_ADVANCED = 2403  # toggle advanced text editor
 ID_STR_RULES_EMPTY    = 2404  # "No rules yet" placeholder
 ID_GRP_RULES_SCROLL   = 2405  # scroll container for the active-rules list
 
-# Core-message id used to defer a rule deletion out of the Delete button's
-# own Command() dispatch (flushing the list while the button is mid-event
-# frees the gadget and crashes C4D). Offset is arbitrary but plugin-unique.
-ID_CORE_REBUILD_RULES = PLUGIN_ID_BRANDNER + 7
-
 # Reserved range for per-rule delete buttons (one per active rule line).
 # Button id = ID_RULE_DELETE_BASE + index. Keep the range generous.
 ID_RULE_DELETE_BASE = 2500
@@ -1366,9 +1361,10 @@ class BrandnerDialog(c4d.gui.GeDialog):
             # Defer the actual delete + list rebuild. Running it inline would
             # LayoutFlushGroup the group that holds this very Delete button
             # while it is still dispatching its command — that frees the
-            # gadget mid-event and crashes C4D. Post a core event instead.
+            # gadget mid-event and crashes C4D. A one-shot dialog timer runs
+            # the work just after this command returns, when it is safe.
             self._pending_delete_row = id - ID_RULE_DELETE_BASE
-            c4d.SpecialEventAdd(ID_CORE_REBUILD_RULES)
+            self.SetTimer(40)
             return True
 
         return True
@@ -1892,18 +1888,18 @@ class BrandnerDialog(c4d.gui.GeDialog):
     def CoreMessage(self, id, msg):
         if id == c4d.EVMSG_CHANGE:
             self.cmsg_change()
-        elif id == ID_CORE_REBUILD_RULES:
-            self.cmsg_rebuild_rules()
         elif id == PLUGIN_ID_BRANDNER:
             self.cmsg_brandner_render_progress()
         return True
 
-    def cmsg_rebuild_rules(self) -> None:
-        """Deferred handler: apply a pending rule deletion safely.
+    def Timer(self, msg) -> None:
+        """One-shot deferred work scheduled out of a Command() dispatch.
 
-        Runs outside the Delete button's Command() dispatch, so flushing the
-        rules list group no longer frees a gadget that is mid-event.
+        Used so a per-rule Delete can flush/rebuild the rules list *after* the
+        button's own command returns — flushing the group while the button is
+        mid-event frees the gadget and crashes C4D.
         """
+        self.SetTimer(0)  # one-shot: stop the timer immediately
         row = getattr(self, "_pending_delete_row", None)
         if row is None:
             return
@@ -2138,14 +2134,16 @@ class BrandnerDialog(c4d.gui.GeDialog):
                     )
                 self.GroupEnd()
 
-        try:
-            self.LayoutChanged(ID_GRP_RULES_LIST)
-        except Exception:
-            pass
-        try:
-            self.LayoutChanged(ID_GRP_RULES_SCROLL)
-        except Exception:
-            pass
+        # Relayout the *outer* Exceptions group, not just the flushed inner
+        # group. In this C4D build LayoutChanged on the inner list / scroll
+        # group alone does not repaint — the list only refreshed on a full
+        # reopen. Relaying out ID_GRP_EXCEPTIONS is the same call that makes
+        # the Advanced-text toggle work, so it reliably repaints here too.
+        for _gid in (ID_GRP_RULES_LIST, ID_GRP_RULES_SCROLL, ID_GRP_EXCEPTIONS):
+            try:
+                self.LayoutChanged(_gid)
+            except Exception:
+                pass
 
     def _persist_rules(self) -> None:
         """Persist current rules to the document so refresh/reopen keeps them."""
