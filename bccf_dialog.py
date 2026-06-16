@@ -1410,20 +1410,29 @@ class BrandnerDialog(c4d.gui.GeDialog):
             self.cmd_toggle_advanced_rules()
             return True
         if id == ID_BCB_EXCLUSION_RULES_RAW:
-            rules_raw = self.GetString(ID_BCB_EXCLUSION_RULES_RAW)
-            self.bcb.SetString(ID_BCB_EXCLUSION_RULES_RAW, rules_raw)
-            self._persist_rules()
-            self.update_combinations()
-            self.rebuild_rules_list()
+            self._apply_rules_raw(self.GetString(ID_BCB_EXCLUSION_RULES_RAW))
             return True
         if ID_RULE_DELETE_BASE <= id <= ID_RULE_DELETE_MAX:
-            # Defer the actual delete + list rebuild. Running it inline would
-            # LayoutFlushGroup the group that holds this very Delete button
-            # while it is still dispatching its command — that frees the
-            # gadget mid-event and crashes C4D. A one-shot dialog timer runs
-            # the work just after this command returns, when it is safe.
-            self._pending_delete_row = id - ID_RULE_DELETE_BASE
-            self.SetTimer(40)
+            # Split the delete into two phases to avoid a crash:
+            # Phase 1 (here, in Command): mutate the data only — no
+            #   LayoutFlushGroup, so the Delete button being dispatched
+            #   is not freed while still on the call stack.
+            # Phase 2 (Timer, 40 ms later): call InitValues() to repaint
+            #   the rules list and all dependent UI.
+            row = id - ID_RULE_DELETE_BASE
+            line_indices = getattr(self, "_rule_row_line_idx", [])
+            if 0 <= row < len(line_indices):
+                line_idx = line_indices[row]
+                lines = (self.GetString(ID_BCB_EXCLUSION_RULES_RAW) or "").splitlines()
+                if 0 <= line_idx < len(lines):
+                    del lines[line_idx]
+                    rules_raw = "\n".join(lines)
+                    self.SetString(ID_BCB_EXCLUSION_RULES_RAW, rules_raw)
+                    self.bcb.SetString(ID_BCB_EXCLUSION_RULES_RAW, rules_raw)
+                    self._persist_rules()
+                    self._combos_dirty = True
+                    self._pending_delete_refresh = True
+                    self.SetTimer(40)
             return True
 
         return True
@@ -1952,18 +1961,17 @@ class BrandnerDialog(c4d.gui.GeDialog):
         return True
 
     def Timer(self, msg) -> None:
-        """One-shot deferred work scheduled out of a Command() dispatch.
+        """Deferred UI refresh after a Delete-rule Command dispatch.
 
-        Used so a per-rule Delete can flush/rebuild the rules list *after* the
-        button's own command returns — flushing the group while the button is
-        mid-event frees the gadget and crashes C4D.
+        The data change (BCB mutation + persist) already happened inline in
+        Command. InitValues() is called here — outside the button's dispatch —
+        so LayoutFlushGroup(ID_GRP_RULES_LIST) runs safely.
         """
-        self.SetTimer(0)  # one-shot: stop the timer immediately
-        row = getattr(self, "_pending_delete_row", None)
-        if row is None:
+        self.SetTimer(0)  # one-shot: cancel immediately
+        if not getattr(self, "_pending_delete_refresh", False):
             return
-        self._pending_delete_row = None
-        self.cmd_delete_rule(row)
+        self._pending_delete_refresh = False
+        self.InitValues()
 
     def cmsg_change(self) -> None:
         doc_current = c4d.documents.GetActiveDocument()
@@ -2211,27 +2219,17 @@ class BrandnerDialog(c4d.gui.GeDialog):
             store_bc_brandner(doc, self.bcb)
 
     def _apply_rules_raw(self, rules_raw: str) -> None:
-        """Write rules back to UI + BCB + document and refresh dependent views.
+        """Write rules back to UI + BCB + document and refresh all dependent views.
 
-        Deliberately skips update_file_structure_preview: that clones the
-        entire scene and freezes the UI thread when called from a fast rule
-        add/delete path.  The preview is still updated on Refresh.
+        Calls InitValues() — the same full-refresh path that the Refresh button
+        uses — because partial LayoutFlushGroup/LayoutChanged sequences do not
+        reliably update the rules list in this C4D build.
         """
         self.SetString(ID_BCB_EXCLUSION_RULES_RAW, rules_raw)
         self.bcb.SetString(ID_BCB_EXCLUSION_RULES_RAW, rules_raw)
         self._persist_rules()
-        # Recompute valid combinations (fast — just filter the Cartesian product).
         self._combos_dirty = True
-        self.ensure_combinations()
-        # Update the combo count label and render-button text.
-        self.update_component_combo_boxes()
-        self.enable_render_buttons()
-        # Rebuild the rule sentences list, then relayout the outer group via
-        # _apply_advanced_visibility — the same call that makes the Advanced
-        # toggle work.  Calling LayoutChanged(ID_GRP_EXCEPTIONS) from inside
-        # rebuild_rules_list itself wipes the dynamic rows (see comment there).
-        self.rebuild_rules_list()
-        self._apply_advanced_visibility()
+        self.InitValues()
 
     def cmd_add_rule(self) -> None:
         if_tok = self._exc_get_selected_if_token()
