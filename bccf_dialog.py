@@ -127,6 +127,11 @@ ID_BTN_RULES_ADVANCED = 2403  # toggle advanced text editor
 ID_STR_RULES_EMPTY    = 2404  # "No rules yet" placeholder
 ID_GRP_RULES_SCROLL   = 2405  # scroll container for the active-rules list
 
+# Core-message id used to defer a rule deletion out of the Delete button's
+# own Command() dispatch (flushing the list while the button is mid-event
+# frees the gadget and crashes C4D). Offset is arbitrary but plugin-unique.
+ID_CORE_REBUILD_RULES = PLUGIN_ID_BRANDNER + 7
+
 # Reserved range for per-rule delete buttons (one per active rule line).
 # Button id = ID_RULE_DELETE_BASE + index. Keep the range generous.
 ID_RULE_DELETE_BASE = 2500
@@ -648,27 +653,28 @@ class BrandnerDialog(c4d.gui.GeDialog):
             self.GroupEnd()
 
             # --- Active rules list (dynamically rebuilt) ---
-            # The scroll viewport must have a FIXED height (BFH_SCALEFIT only,
-            # no BFV_SCALEFIT). With vertical scale-fit it would just grow to
-            # fit every rule and the scrollbar would never engage. The inner
-            # content group packs to the top (BFV_TOP) so it can grow past the
-            # viewport and trigger the auto vertical scrollbar.
+            # A C4D group sizes to fit its children, so a bare scroll group
+            # just keeps growing to fit every rule and never scrolls. The fix
+            # is a FIXED-HEIGHT wrapper group (BFH_SCALEFIT only, no BFV) with
+            # an inith; the scroll group fills that bounded box and clips its
+            # content, and the inner list (BFV_TOP) overflows to trigger the
+            # auto vertical scrollbar.
             self.AddStaticText(NO_ID, BF_L, name="Active rules:")
-            if self.ScrollGroupBegin(
-                ID_GRP_RULES_SCROLL,
-                BF_SF,
-                c4d.SCROLLGROUP_VERT | c4d.SCROLLGROUP_AUTOVERT,
-                initw=0,
-                inith=110,
-            ):
-                if self.GroupBegin(ID_GRP_RULES_LIST, BF_SFT, cols=1):
-                    self.GroupSpace(0, 2)
-                    # Contents filled in rebuild_rules_list().
-                    self.AddStaticText(
-                        ID_STR_RULES_EMPTY, BF_L, name="No rules yet."
-                    )
-                self.GroupEnd()
-            self.GroupEnd()  # scroll
+            if self.GroupBegin(NO_ID, BF_SF, cols=1, rows=1, inith=110):
+                if self.ScrollGroupBegin(
+                    ID_GRP_RULES_SCROLL,
+                    BF_SFSF,
+                    c4d.SCROLLGROUP_VERT | c4d.SCROLLGROUP_AUTOVERT,
+                ):
+                    if self.GroupBegin(ID_GRP_RULES_LIST, BF_SFT, cols=1):
+                        self.GroupSpace(0, 2)
+                        # Contents filled in rebuild_rules_list().
+                        self.AddStaticText(
+                            ID_STR_RULES_EMPTY, BF_L, name="No rules yet."
+                        )
+                    self.GroupEnd()
+                self.GroupEnd()  # scroll
+            self.GroupEnd()  # fixed-height wrapper
 
             # Validation / exclusion-summary feedback (below the list)
             self.AddStaticText(ID_STR_RULE_STATUS, BF_SF, name=" ")
@@ -1357,7 +1363,12 @@ class BrandnerDialog(c4d.gui.GeDialog):
             self.rebuild_rules_list()
             return True
         if ID_RULE_DELETE_BASE <= id <= ID_RULE_DELETE_MAX:
-            self.cmd_delete_rule(id - ID_RULE_DELETE_BASE)
+            # Defer the actual delete + list rebuild. Running it inline would
+            # LayoutFlushGroup the group that holds this very Delete button
+            # while it is still dispatching its command — that frees the
+            # gadget mid-event and crashes C4D. Post a core event instead.
+            self._pending_delete_row = id - ID_RULE_DELETE_BASE
+            c4d.SpecialEventAdd(ID_CORE_REBUILD_RULES)
             return True
 
         return True
@@ -1881,9 +1892,23 @@ class BrandnerDialog(c4d.gui.GeDialog):
     def CoreMessage(self, id, msg):
         if id == c4d.EVMSG_CHANGE:
             self.cmsg_change()
+        elif id == ID_CORE_REBUILD_RULES:
+            self.cmsg_rebuild_rules()
         elif id == PLUGIN_ID_BRANDNER:
             self.cmsg_brandner_render_progress()
         return True
+
+    def cmsg_rebuild_rules(self) -> None:
+        """Deferred handler: apply a pending rule deletion safely.
+
+        Runs outside the Delete button's Command() dispatch, so flushing the
+        rules list group no longer frees a gadget that is mid-event.
+        """
+        row = getattr(self, "_pending_delete_row", None)
+        if row is None:
+            return
+        self._pending_delete_row = None
+        self.cmd_delete_rule(row)
 
     def cmsg_change(self) -> None:
         doc_current = c4d.documents.GetActiveDocument()
