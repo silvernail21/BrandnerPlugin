@@ -334,7 +334,7 @@ class BrandnerRulesDialog(c4d.gui.GeDialog):
 
     def InitValues(self) -> bool:
         self._populate_combos()
-        self._refresh_rows()
+        self._refresh_rows(do_layout_change=False)
         raw = self._parent.bcb.GetString(ID_BCB_EXCLUSION_RULES_RAW, "") or ""
         self.SetString(self._ID_STR_RAW, raw)
         self._update_status()
@@ -431,7 +431,7 @@ class BrandnerRulesDialog(c4d.gui.GeDialog):
     # UI update helpers
     # ------------------------------------------------------------------
 
-    def _refresh_rows(self) -> None:
+    def _refresh_rows(self, do_layout_change: bool = True) -> None:
         rules = self._get_rules_list()
         for i in range(self._MAX_ROWS):
             if i < len(rules):
@@ -439,8 +439,9 @@ class BrandnerRulesDialog(c4d.gui.GeDialog):
                 self.SetString(self._ID_ROW_TXT + i, rules[i])
             else:
                 self.HideElement(self._ID_ROW_GRP + i, True)
-        self.LayoutChanged(self._ID_GRP_ROWS)
-        self.LayoutChanged(self._ID_GRP_BLDR)
+        if do_layout_change:
+            self.LayoutChanged(self._ID_GRP_ROWS)
+            self.LayoutChanged(self._ID_GRP_BLDR)
 
     def _update_status(self) -> None:
         rules = self._get_rules_list()
@@ -1913,16 +1914,17 @@ class BrandnerDialog(c4d.gui.GeDialog):
             )
 
     def _open_rules_dialog(self) -> None:
-        if self._rules_dialog is None:
-            self._rules_dialog = BrandnerRulesDialog(self)
-        if not self._rules_dialog.IsOpen():
-            self._rules_dialog.Open(
-                dlgtype=c4d.DLG_TYPE_ASYNC,
-                pluginid=PLUGIN_ID_BRANDNER,
-                subid=2,
-                defaultw=500,
-                defaulth=520,
-            )
+        if self._rules_dialog is not None and self._rules_dialog.IsOpen():
+            return  # already visible — don't open a second one
+        # Always create a fresh instance to guarantee clean state on reopen
+        self._rules_dialog = BrandnerRulesDialog(self)
+        self._rules_dialog.Open(
+            dlgtype=c4d.DLG_TYPE_ASYNC,
+            pluginid=PLUGIN_ID_BRANDNER,
+            subid=2,
+            defaultw=500,
+            defaulth=520,
+        )
 
     def cmd_variables_combobox(self):
         self.init_dyn_options()
