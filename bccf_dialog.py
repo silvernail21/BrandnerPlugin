@@ -80,6 +80,7 @@ from bccf_utils import (
     reset_render_progress,
     validate_bc_brandner,
     parse_exclusion_rules,
+    parse_subset_spec,
     is_valid_combo_names,
 )
 
@@ -124,6 +125,7 @@ ID_STR_CONSTS_WARN = ID_CMB_CONSTS + OFFSET_WARN
 ID_STR_COMBO_COUNT = 2190
 ID_STR_SCENE_WARNINGS = 2191
 ID_STR_COMBO_POS = 2192
+ID_STR_RENDER_SUBSET = 2193
 
 ID_FILE_STRUCTURE_LIST = 2300
 ID_TXT_TOKEN_HELP = 2301
@@ -189,6 +191,7 @@ IDS_DISABLE_ALL = [
     ID_CHK_GENERATE_CSV,
     ID_CHK_SAVE_PROJECT,
     ID_CMB_MODE_RENDER,
+    ID_STR_RENDER_SUBSET,
     ID_FILE_STRUCTURE_LIST,
 ]
 
@@ -213,6 +216,7 @@ IDS_ENABLE_ALL = [
     ID_CHK_GENERATE_CSV,
     ID_CHK_SAVE_PROJECT,
     ID_CMB_MODE_RENDER,
+    ID_STR_RENDER_SUBSET,
     ID_FILE_STRUCTURE_LIST,
 ]
 
@@ -258,6 +262,7 @@ class BrandnerDialog(c4d.gui.GeDialog):
         self._raw_combo_count: int = 0
         self._preview_combo_idx: Optional[int] = None
         self._preview_cache_key: Optional[tuple] = None
+        self._num_baked_combos: Optional[int] = None
 
         self.init_component_names()
         self.possible_combinations = self.calculate_combinations()
@@ -657,6 +662,16 @@ class BrandnerDialog(c4d.gui.GeDialog):
             self.GroupSpace(0, 10)
 
             self.cl_group_combobox_render_mode()
+
+            if self.GroupBegin(NO_ID, BF_SF, cols=3, rows=1):
+                self.GroupSpace(5, 0)
+                self.AddStaticText(NO_ID, BF_L, name="Render Subset:")
+                self.AddEditText(ID_STR_RENDER_SUBSET, BF_SF)
+                self.AddStaticText(
+                    NO_ID, BF_L, name="e.g. 3-8 or 1,4,7 — empty = all"
+                )
+            self.GroupEnd()
+
             self.cl_group_render_extras()
         self.GroupEnd()
 
@@ -1221,7 +1236,8 @@ class BrandnerDialog(c4d.gui.GeDialog):
 
         idx_frame = get_index_render_frame()
         if idx_frame >= 0:
-            progress = idx_frame * 100.0 / num_combinations
+            num_baked = self._num_baked_combos or num_combinations
+            progress = idx_frame * 100.0 / max(1, num_baked)
             self.SetString(
                 ID_BTN_RENDER,
                 f"Rendering in Progress: {progress:.02f}%, click to cancel",
@@ -1379,6 +1395,8 @@ class BrandnerDialog(c4d.gui.GeDialog):
         self,
         doc: c4d.documents.BaseDocument,
         rd: Optional[c4d.documents.RenderData],
+        *,
+        num_frames: Optional[int] = None,
     ) -> c4d.BaseContainer:
         if rd is None:
             rd = doc.GetActiveRenderData()
@@ -1396,7 +1414,8 @@ class BrandnerDialog(c4d.gui.GeDialog):
         idx_frame_from = c4d.BaseTime(BAKE_FRAME_OFFSET, fps)
         rd[c4d.RDATA_FRAMEFROM] = idx_frame_from
 
-        num_combinations = len(self.possible_combinations)
+        # num_frames covers subset renders (fewer frames baked than combos)
+        num_combinations = num_frames or len(self.possible_combinations)
         idx_frame_to = c4d.BaseTime(BAKE_FRAME_OFFSET + num_combinations - 1, fps)
         rd[c4d.RDATA_FRAMETO] = idx_frame_to
 
@@ -1723,7 +1742,22 @@ class BrandnerDialog(c4d.gui.GeDialog):
             open_error_requester(msg)
             return
 
-        total_combos = len(self.possible_combinations)
+        # Optional subset: bake/render only the requested combination numbers
+        # (1-based, matching the "Combination N of M" browser label).
+        subset_spec = self.GetString(ID_STR_RENDER_SUBSET) or ""
+        subset_indices, subset_err = parse_subset_spec(
+            subset_spec, len(self.possible_combinations)
+        )
+        if subset_err is not None:
+            open_error_requester(f"Render Subset: {subset_err}")
+            return
+        if subset_indices is None:
+            combos_render = self.possible_combinations
+        else:
+            combos_render = [self.possible_combinations[i] for i in subset_indices]
+
+        total_combos = len(combos_render)
+        self._num_baked_combos = total_combos
         self._set_prepare_status("Preparing bake: cloning scene…", progress=0.02)
 
         doc_active = c4d.documents.GetActiveDocument()
@@ -1735,7 +1769,9 @@ class BrandnerDialog(c4d.gui.GeDialog):
         bc_doc.SetContainer(PLUGIN_ID_BRANDNER, self.bcb)
 
         self.set_render_document_name(doc)
-        bc_rd = self.prepare_render_data_for_render(doc, rd=None)
+        bc_rd = self.prepare_render_data_for_render(
+            doc, rd=None, num_frames=total_combos
+        )
 
         null_variables = doc.SearchObject(BR_VARIABLES)
         null_components = doc.SearchObject(BR_COMPONENTS)
@@ -1780,7 +1816,7 @@ class BrandnerDialog(c4d.gui.GeDialog):
             status_step = 10
 
         try:
-            for _idx_combo, combo in enumerate(self.possible_combinations):
+            for _idx_combo, combo in enumerate(combos_render):
                 if (
                     _idx_combo == 0
                     or (_idx_combo % status_step == 0)
@@ -2416,7 +2452,8 @@ class BrandnerDialog(c4d.gui.GeDialog):
 
     def cmsg_brandner_render_progress(self) -> None:
         idx_frame = get_index_render_frame()
-        num_combinations = len(self.possible_combinations)
+        # Subset renders bake fewer frames than there are combinations.
+        num_combinations = self._num_baked_combos or len(self.possible_combinations)
         if idx_frame >= num_combinations:
             reset_render_progress()
 

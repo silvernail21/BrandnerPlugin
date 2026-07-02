@@ -733,6 +733,47 @@ def render_in_picture_viewer_ext(
 # ----------------------------------------------------------------------
 
 
+def parse_subset_spec(
+    spec: str,
+    total: int,
+) -> Tuple[Optional[List[int]], Optional[str]]:
+    """Parse a render-subset spec like "5", "3-8" or "1,4,7-9".
+
+    Numbers are 1-based (matching the "Combination N of M" browser label).
+
+    Returns (indices, error):
+      - (None, None)  — spec empty: render everything
+      - (list, None)  — sorted unique 0-based indices to render
+      - (None, str)   — spec invalid; error describes why
+    """
+    spec = (spec or "").strip()
+    if not spec:
+        return None, None
+
+    numbers = set()
+    for part in spec.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if "-" in part:
+            bits = [b.strip() for b in part.split("-")]
+            if len(bits) != 2 or not bits[0].isdigit() or not bits[1].isdigit():
+                return None, f"Invalid range: '{part}'"
+            a, b = int(bits[0]), int(bits[1])
+            if a > b:
+                a, b = b, a
+            numbers.update(range(a, b + 1))
+        elif part.isdigit():
+            numbers.add(int(part))
+        else:
+            return None, f"Invalid entry: '{part}'"
+
+    indices = sorted(n - 1 for n in numbers if 1 <= n <= total)
+    if not indices:
+        return None, f"No combination numbers in '{spec}' are within 1-{total}"
+    return indices, None
+
+
 def parse_exclusion_rules(raw: str) -> List[Dict]:
     """
     Parse user-defined rules from a multiline string.
