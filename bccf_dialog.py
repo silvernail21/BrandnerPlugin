@@ -2224,6 +2224,11 @@ class BrandnerDialog(c4d.gui.GeDialog):
     # ------------------------------------------------------------------
 
     def CoreMessage(self, id, msg):
+        # Core messages can arrive after the dialog closed (or while it is
+        # half-initialized) — touching widgets then crashes/locks up C4D.
+        if not self.IsOpen():
+            return True
+
         if id == c4d.EVMSG_CHANGE:
             self.cmsg_change()
         elif id == PLUGIN_ID_BRANDNER:

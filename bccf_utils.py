@@ -18,6 +18,7 @@ from bccf_constants import (
     ID_BCB_DIRECTORY_OUTPUT,
     ID_BCB_DO_GENERATE_CSV,
     ID_BCB_DO_SAVE_PROJECT,
+    ID_BCB_EXCLUSION_RULES_RAW,
     ID_BCB_FILENAME,
     ID_BCB_MODE_RENDER,
     ID_BCB_PREFIX,
@@ -117,11 +118,49 @@ def get_bc_brandner_default() -> c4d.BaseContainer:
     return bcb
 
 
+def ensure_bc_brandner_defaults(bcb: c4d.BaseContainer) -> None:
+    """Backfill parameters missing from containers stored by older
+    plugin versions.
+
+    Documents saved with an older plugin carry a container without the
+    newer fields. Reading an absent field returns None, which crashes
+    SetInt32()/os.path.join() during dialog initialization — and with
+    EVMSG_CHANGE re-triggering the broken init, C4D appears frozen.
+    Only absent (None) fields are filled; stored values are never
+    overwritten.
+    """
+    if bcb is None:
+        return
+
+    defaults_string = [
+        (ID_BCB_PREFIX, DEFAULT_PREFIX),
+        (ID_BCB_DELIMITER, DEFAULT_DELIMITER),
+        (ID_BCB_PRODUCT_NAME, f"{DEFAULT_PRODUCT_NAME}{random.randint(0, 1000)}"),
+        (ID_BCB_DIRECTORY_OUTPUT, DEFAULT_DIRECTORY_OUTPUT),
+        (ID_BCB_FILENAME, DEFAULT_FILENAME),
+        (ID_BCB_EXCLUSION_RULES_RAW, ""),
+    ]
+    for _id, _default in defaults_string:
+        if bcb[_id] is None:
+            bcb.SetString(_id, _default)
+
+    if bcb[ID_BCB_DO_GENERATE_CSV] is None:
+        bcb.SetBool(ID_BCB_DO_GENERATE_CSV, DEFAULT_DO_GENERATE_CSV)
+    if bcb[ID_BCB_DO_SAVE_PROJECT] is None:
+        bcb.SetBool(ID_BCB_DO_SAVE_PROJECT, DEFAULT_DO_SAVE_PROJECT)
+    if bcb[ID_BCB_MODE_RENDER] is None:
+        bcb.SetInt32(ID_BCB_MODE_RENDER, DEFAULT_MODE_RENDER)
+
+    # Internal flag — must never be persisted as True.
+    bcb.SetBool(ID_BCB_TOKEN_EXAMPLE_MODE, False)
+
+
 def get_bc_brandner_from_doc(
     doc: c4d.documents.BaseDocument,
 ) -> c4d.BaseContainer:
     bc_doc = doc.GetDataInstance()
     bcb = bc_doc.GetContainerInstance(PLUGIN_ID_BRANDNER)
+    ensure_bc_brandner_defaults(bcb)
     return bcb
 
 
