@@ -776,6 +776,14 @@ class BrandnerDialog(c4d.gui.GeDialog):
     # ------------------------------------------------------------------
 
     def InitValues(self):
+        if getattr(self, "_is_layout_restore", False):
+            # C4D is restoring the saved layout during application startup
+            # and is not fully initialized — heavy work here (scene clone,
+            # document walks) can wedge the splash screen. The first
+            # EVMSG_CHANGE after startup runs cmd_refresh for the full init.
+            self._is_layout_restore = False
+            return True
+
         if get_index_render_frame() > -1:
             self.enable_render_buttons()
             return True
@@ -1128,6 +1136,12 @@ class BrandnerDialog(c4d.gui.GeDialog):
         """
         doc_src = c4d.documents.GetActiveDocument()
         if doc_src is None:
+            self.SetString(ID_FILE_STRUCTURE_LIST, "")
+            return
+
+        if doc_src.SearchObject(BR_COMPONENTS) is None:
+            # No ComboFlow hierarchy in this scene — nothing to preview and
+            # nothing worth cloning the document for.
             self.SetString(ID_FILE_STRUCTURE_LIST, "")
             return
 

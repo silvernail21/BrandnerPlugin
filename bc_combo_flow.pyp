@@ -112,17 +112,27 @@ class CommandDataBrandner(c4d.plugins.CommandData):
         return is_open
 
     def RestoreLayout(self, sec_ref):
+        """Called during C4D startup when the dialog is part of the saved
+        layout. C4D is NOT fully initialized yet — keep this path minimal
+        and never let it raise, or startup wedges at the splash screen.
+        """
         global g_dialog
 
-        if self.dialog is None:
-            self.dialog = BrandnerDialog()
-        g_dialog = self.dialog
+        try:
+            if self.dialog is None:
+                self.dialog = BrandnerDialog()
+            g_dialog = self.dialog
 
-        is_open = self.dialog.Restore(
-            pluginid=PLUGIN_ID_BRANDNER, secret=sec_ref)
-        if is_open:
-            self.dialog.layout_changed_components()
-        return is_open
+            # Tell InitValues to skip heavy work (scene clone, document
+            # walks) during startup; the first EVMSG_CHANGE afterwards
+            # triggers a full refresh.
+            self.dialog._is_layout_restore = True
+
+            return self.dialog.Restore(
+                pluginid=PLUGIN_ID_BRANDNER, secret=sec_ref)
+        except Exception as err:
+            logging.error("BC-ComboFlow: RestoreLayout failed: %s", err)
+            return True
 
 
 def plugin_message_end_activity(id: int, data: c4d.BaseContainer) -> bool:

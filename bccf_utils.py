@@ -195,6 +195,9 @@ def ensure_bc_brandner_defaults(bcb: c4d.BaseContainer) -> None:
 def get_bc_brandner_from_doc(
     doc: c4d.documents.BaseDocument,
 ) -> c4d.BaseContainer:
+    if doc is None:
+        # Can happen while C4D is still starting up (layout restore).
+        return None
     bc_doc = doc.GetDataInstance()
     bcb = bc_doc.GetContainerInstance(PLUGIN_ID_BRANDNER)
     ensure_bc_brandner_defaults(bcb)
@@ -207,7 +210,7 @@ def get_bc_brandner(do_init_doc: bool) -> c4d.BaseContainer:
     if bcb is not None:
         return bcb
     bcb = get_bc_brandner_default()
-    if do_init_doc:
+    if do_init_doc and doc is not None:
         store_bc_brandner(doc, bcb)
     return bcb
 
