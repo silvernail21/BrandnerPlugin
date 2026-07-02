@@ -119,6 +119,7 @@ ID_STR_CONSTS_LABEL = ID_CMB_CONSTS + OFFSET_LABEL
 ID_STR_CONSTS_WARN = ID_CMB_CONSTS + OFFSET_WARN
 
 ID_STR_COMBO_COUNT = 2190
+ID_STR_SCENE_WARNINGS = 2191
 
 ID_FILE_STRUCTURE_LIST = 2300
 ID_TXT_TOKEN_HELP = 2301
@@ -432,19 +433,26 @@ class BrandnerDialog(c4d.gui.GeDialog):
         return True
 
     def cl_group_topbar(self) -> None:
-        """Always-visible bar: scene refresh + live combination count."""
-        if self.GroupBegin(NO_ID, BF_SF, cols=2, rows=1):
-            self.GroupSpace(10, 0)
+        """Always-visible bar: scene refresh + live combination count + warnings."""
+        if self.GroupBegin(NO_ID, BF_SF, cols=1):
+            self.GroupSpace(0, 2)
 
-            self.AddButton(
-                ID_BTN_REFRESH, BF_L, name="Refresh Scene", initw=140, inith=12
-            )
-            self.AddStaticText(
-                ID_STR_COMBO_COUNT,
-                BF_RS,
-                name="00000 / 00000 Combinations",  # replaced in InitValues()
-                borderstyle=c4d.BORDER_WITH_TITLE_BOLD,
-            )
+            if self.GroupBegin(NO_ID, BF_SF, cols=2, rows=1):
+                self.GroupSpace(10, 0)
+
+                self.AddButton(
+                    ID_BTN_REFRESH, BF_L, name="Refresh Scene", initw=140, inith=12
+                )
+                self.AddStaticText(
+                    ID_STR_COMBO_COUNT,
+                    BF_RS,
+                    name="00000 / 00000 Combinations",  # replaced in InitValues()
+                    borderstyle=c4d.BORDER_WITH_TITLE_BOLD,
+                )
+            self.GroupEnd()
+
+            # Scene/setup problem line — blank when everything is OK.
+            self.AddStaticText(ID_STR_SCENE_WARNINGS, BF_SF, name=" ")
         self.GroupEnd()
 
     # ---- Tabs ---------------------------------------------------------
@@ -760,6 +768,8 @@ class BrandnerDialog(c4d.gui.GeDialog):
         rules_raw = self.bcb.GetString(ID_BCB_EXCLUSION_RULES_RAW, "")
         self.SetString(ID_BCB_EXCLUSION_RULES_RAW, rules_raw)
 
+        self.update_warnings()
+
         return True
 
     def update_combinations(self) -> None:
@@ -782,6 +792,138 @@ class BrandnerDialog(c4d.gui.GeDialog):
         self.ensure_combinations()
         self.update_component_combo_boxes()
         self.enable_render_buttons()
+        self.update_warnings()
+
+    # ------------------------------------------------------------------
+    # Warnings (duplicate names / filename collisions / stale rules)
+    # ------------------------------------------------------------------
+
+    def _check_duplicate_names(self) -> List[str]:
+        """Find names used more than once among options, cameras and constants.
+
+        All matching (combos, rules, visibility) is done by object name, so a
+        duplicated name silently produces wrong renders.
+        Returns e.g. ["'Red' x2"].
+        """
+        counts: Dict[str, int] = {}
+
+        for vname in self._scene_cache.get("variable_names", []):
+            var_info = self._scene_cache.get("variables", {}).get(vname, {})
+            for opt_name in var_info.get("option_names", []):
+                counts[opt_name] = counts.get(opt_name, 0) + 1
+
+        for cam_name in self._scene_cache.get("camera_names", []):
+            counts[cam_name] = counts.get(cam_name, 0) + 1
+
+        for const_name in self._scene_cache.get("constant_names", []):
+            counts[const_name] = counts.get(const_name, 0) + 1
+
+        return [
+            f"'{name}' x{num}"
+            for name, num in sorted(counts.items())
+            if num > 1
+        ]
+
+    def _check_filename_collision_warnings(self) -> List[str]:
+        """Warn when the filename pattern cannot distinguish combinations.
+
+        Without a differentiating token, every combination renders to the
+        same file and silently overwrites the previous image.
+        Conservative checks only (no false alarms):
+          - >1 camera but no $_b_cam token
+          - a variable with >1 option but no $_b_vars / $_b_v* token
+        """
+        filename = self.bcb.GetString(ID_BCB_FILENAME) or ""
+        warnings: List[str] = []
+
+        if len(self.get_camera_names()) > 1 and "_b_cam" not in filename:
+            warnings.append(
+                "Filename pattern has no $_b_cam token — renders from "
+                "different cameras will overwrite each other."
+            )
+
+        has_var_token = "_b_vars" in filename or "_b_v" in filename
+        has_multi_option_var = any(
+            len(opts) > 1 for opts in self.get_variables_options_names()
+        )
+        if has_multi_option_var and not has_var_token:
+            warnings.append(
+                "Filename pattern has no $_b_vars token — different option "
+                "combinations will overwrite each other."
+            )
+
+        return warnings
+
+    def _check_rule_warnings(self) -> List[str]:
+        """Validate exclusion rules against the current scene.
+
+        Flags lines that cannot be parsed and rule tokens that match no
+        object name in the scene (typically after a rename), since such
+        rules silently stop excluding anything.
+        """
+        raw = self.bcb.GetString(ID_BCB_EXCLUSION_RULES_RAW, "") or ""
+        if not raw.strip():
+            return []
+
+        # Same token set the rule builder offers (includes nested objects),
+        # so anything built via the UI can never be flagged as unknown.
+        known = {raw_token for _label, raw_token in self.get_exception_items()}
+
+        warnings: List[str] = []
+        for num, line in enumerate(raw.splitlines(), start=1):
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+
+            parsed = parse_exclusion_rules(line)
+            if not parsed:
+                warnings.append(f"Rule line {num} cannot be parsed.")
+                continue
+
+            rule = parsed[0]
+            tokens = [t for group in rule["if_groups"] for t in group]
+            tokens += rule["targets"]
+            for tok in tokens:
+                if tok not in known:
+                    warnings.append(
+                        f"Rule line {num}: '{tok}' not found in scene."
+                    )
+
+        return warnings
+
+    def update_warnings(self) -> None:
+        """Refresh the top warning line and the rule status label."""
+        problems: List[str] = []
+
+        duplicates = self._check_duplicate_names()
+        if duplicates:
+            shown = ", ".join(duplicates[:3])
+            more = f" (+{len(duplicates) - 3} more)" if len(duplicates) > 3 else ""
+            problems.append(f"Duplicate names: {shown}{more}")
+
+        collisions = self._check_filename_collision_warnings()
+        if collisions:
+            problems.append("filename pattern may overwrite files (see Render tab)")
+
+        rule_warnings = self._check_rule_warnings()
+        if rule_warnings:
+            problems.append(
+                f"{len(rule_warnings)} rule problem"
+                f"{'s' if len(rule_warnings) != 1 else ''} (see Rules tab)"
+            )
+
+        if problems:
+            self.SetString(ID_STR_SCENE_WARNINGS, "⚠ " + "  ·  ".join(problems))
+        else:
+            self.SetString(ID_STR_SCENE_WARNINGS, " ")
+
+        # Rule status label: warnings take priority over the info text that
+        # _update_combo_count_label may have written.
+        if rule_warnings:
+            shown = rule_warnings[0]
+            if len(rule_warnings) > 1:
+                shown += f"  (+{len(rule_warnings) - 1} more)"
+            self.SetString(ID_STR_RULE_STATUS, "⚠ " + shown)
 
     def update_component_combo_boxes(self) -> None:
         self.update_variables_combo_box()
@@ -951,7 +1093,11 @@ class BrandnerDialog(c4d.gui.GeDialog):
 
         filename = self.bcb.GetString(ID_BCB_FILENAME)
         token_names = token_path_to_token_names(filename)
-        preview_text = token_names + "\n\n"
+        preview_text = token_names + "\n"
+
+        for _warning in self._check_filename_collision_warnings():
+            preview_text += f"⚠ {_warning}\n"
+        preview_text += "\n"
 
         self.ensure_combinations()
         combos = self.possible_combinations
