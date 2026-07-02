@@ -74,6 +74,7 @@ from bccf_utils import (
     set_visibility_show,
     set_visibility_direct,
     resolve_output_directory,
+    save_world_defaults,
     store_bc_brandner,
     render_in_picture_viewer_ext,
     reset_render_progress,
@@ -2217,6 +2218,8 @@ class BrandnerDialog(c4d.gui.GeDialog):
         self.bcb[id_param] = value
         self.bcb = store_bc_brandner(doc, self.bcb)
         doc.SetChanged()
+        # Remember naming/render preferences as defaults for new documents.
+        save_world_defaults(self.bcb)
         self.InitValues()
 
     # ------------------------------------------------------------------

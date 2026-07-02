@@ -101,6 +101,32 @@ def store_bc_brandner(
     return bc_doc.GetContainerInstance(PLUGIN_ID_BRANDNER)
 
 
+# Parameters remembered across documents (stored in C4D's world plugin
+# data). Product name and output directory stay per-document on purpose.
+IDS_WORLD_DEFAULTS = [
+    ID_BCB_PREFIX,
+    ID_BCB_DELIMITER,
+    ID_BCB_FILENAME,
+    ID_BCB_DO_GENERATE_CSV,
+    ID_BCB_DO_SAVE_PROJECT,
+    ID_BCB_MODE_RENDER,
+]
+
+
+def save_world_defaults(bcb: c4d.BaseContainer) -> None:
+    """Remember the user's naming/render preferences across documents."""
+    if bcb is None:
+        return
+    bc = c4d.BaseContainer()
+    for _id in IDS_WORLD_DEFAULTS:
+        if bcb[_id] is not None:
+            bc[_id] = bcb[_id]
+    try:
+        c4d.plugins.SetWorldPluginData(PLUGIN_ID_BRANDNER, bc, add=True)
+    except Exception as err:
+        logging.warning("Failed to save world defaults: %s", err)
+
+
 def get_bc_brandner_default() -> c4d.BaseContainer:
     bcb = c4d.BaseContainer(PLUGIN_ID_BRANDNER)
     bcb.SetString(ID_BCB_PREFIX, DEFAULT_PREFIX)
@@ -112,6 +138,17 @@ def get_bc_brandner_default() -> c4d.BaseContainer:
     bcb.SetBool(ID_BCB_DO_GENERATE_CSV, DEFAULT_DO_GENERATE_CSV)
     bcb.SetBool(ID_BCB_DO_SAVE_PROJECT, DEFAULT_DO_SAVE_PROJECT)
     bcb.SetInt32(ID_BCB_MODE_RENDER, DEFAULT_MODE_RENDER)
+
+    # Overlay the user's remembered preferences (last-used prefix,
+    # delimiter, filename pattern, ...) over the factory defaults.
+    try:
+        bc_world = c4d.plugins.GetWorldPluginData(PLUGIN_ID_BRANDNER)
+    except Exception:
+        bc_world = None
+    if bc_world is not None:
+        for _id in IDS_WORLD_DEFAULTS:
+            if bc_world[_id] is not None:
+                bcb[_id] = bc_world[_id]
 
     # Internal Parameters
     bcb.SetBool(ID_BCB_TOKEN_EXAMPLE_MODE, False)  # Has to be False!
