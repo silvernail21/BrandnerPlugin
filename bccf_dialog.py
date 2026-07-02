@@ -1617,7 +1617,11 @@ class BrandnerDialog(c4d.gui.GeDialog):
             self.bcb.SetString(ID_BCB_EXCLUSION_RULES_RAW, rules_raw)
             doc = c4d.documents.GetActiveDocument()
             if doc:
-                store_bc_brandner(doc, self.bcb)
+                # store_bc_brandner replaces the container stored in the doc;
+                # self.bcb MUST be reassigned to the returned instance or it
+                # dangles and every later read returns None.
+                self.bcb = store_bc_brandner(doc, self.bcb)
+                doc.SetChanged()
 
             # Reset builder state after successful add
             self._exc_if_groups = []
@@ -1628,6 +1632,12 @@ class BrandnerDialog(c4d.gui.GeDialog):
         if id == ID_BCB_EXCLUSION_RULES_RAW:
             rules_raw = self.GetString(ID_BCB_EXCLUSION_RULES_RAW)
             self.bcb.SetString(ID_BCB_EXCLUSION_RULES_RAW, rules_raw)
+            doc = c4d.documents.GetActiveDocument()
+            if doc:
+                # Persist hand-typed rules to the document (previously they
+                # were only saved when some other parameter was edited).
+                self.bcb = store_bc_brandner(doc, self.bcb)
+                doc.SetChanged()
             self._update_after_rules_change()
             return True
 
@@ -1955,7 +1965,7 @@ class BrandnerDialog(c4d.gui.GeDialog):
 
         doc.StartUndo()
 
-        store_bc_brandner(doc, self.bcb)
+        self.bcb = store_bc_brandner(doc, self.bcb)
         null_components = create_null(doc, BR_COMPONENTS, add_undo=True)
         null_variables = create_null(
             doc,
