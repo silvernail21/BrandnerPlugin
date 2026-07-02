@@ -98,6 +98,9 @@ ID_BTN_WRITE_CSV = 1008
 ID_TGRP_TABS = 2000
 ID_GRP_RENDER = 2001
 ID_GRP_COMPONENT = 2002
+ID_GRP_TAB_SETUP = 2003
+ID_GRP_TAB_OUTPUT = 2004
+ID_GRP_TAB_RULES = 2005
 
 OFFSET_LABEL = 1
 OFFSET_WARN = 2
@@ -409,65 +412,143 @@ class BrandnerDialog(c4d.gui.GeDialog):
         self.SetTitle(f"{PLUGIN_NAME_BRANDNER} v{PLUGIN_VERSION}")
 
         if self.GroupBegin(NO_ID, BF_SFSF, cols=1):
-            self.GroupBorderSpace(5, 5, 5, 0)
+            self.GroupBorderSpace(5, 5, 5, 5)
+            self.GroupSpace(0, 8)
 
-            # To reactivate "Render" tab, swap commenting next two lines:
-            # if self.TabGroupBegin(ID_TGRP_TABS, BF_SFSF):
-            if self.GroupBegin(ID_TGRP_TABS, BF_SFSF):
-                self.cl_group_tab_main()
+            self.cl_group_topbar()
+
+            if self.TabGroupBegin(ID_TGRP_TABS, BF_SFSF):
+                self.cl_group_tab_setup()
+                self.cl_group_tab_output()
+                self.cl_group_tab_rules()
+                self.cl_group_tab_render()
             self.GroupEnd()  # TabGroup
+
+            # Primary action — always visible regardless of active tab.
+            # Its label doubles as a status/guidance line.
+            self.AddButton(ID_BTN_RENDER, BF_SF, name=" ", inith=20)
         self.GroupEnd()  # Dialog
 
         return True
 
-    def cl_group_tab_main(self) -> None:
-        if self.GroupBegin(ID_GRP_RENDER, BF_SFSF, cols=1, title="Render"):
-            self.GroupSpace(0, 10)
+    def cl_group_topbar(self) -> None:
+        """Always-visible bar: scene refresh + live combination count."""
+        if self.GroupBegin(NO_ID, BF_SF, cols=2, rows=1):
+            self.GroupSpace(10, 0)
 
-            self.cl_group_general_settings()
-            self.cl_group_components()
-            self.cl_group_render_parameters()
-            self.cl_group_render_buttons()
-            self.cl_group_file_structure_preview()
-            self.cl_group_exceptions()
-        self.GroupEnd()  # Render
-
-    def cl_group_general_settings(self) -> None:
-        if self.GroupBegin(NO_ID, BF_SF, title="Product", cols=1):
-            self.GroupBorder(c4d.BORDER_WITH_TITLE_BOLD)
-            self.GroupBorderSpace(10, 5, 10, 5)
-
-            self.AddEditText(ID_STR_PRODUCT_NAME, BF_SF)
-
-            if self.GroupBegin(NO_ID, BF_SF, cols=2):  # Buttons
-                self.AddButton(
-                    ID_BTN_INIT_HIERARCHY,
-                    BF_SF,
-                    name="Set Up Project Hierarchy",
-                    inith=10,
-                )
-                self.AddButton(ID_BTN_REFRESH, BF_SF, name="Refresh", inith=10)
-            self.GroupEnd()  # Buttons
-        self.GroupEnd()  # Settings
-
-    def cl_group_components(self, idx_var: int = 0) -> None:
-        if self.GroupBegin(ID_GRP_COMPONENT, BF_SF, cols=1, title="Components"):
-            self.GroupBorder(c4d.BORDER_WITH_TITLE_BOLD)
-            self.GroupBorderSpace(10, 5, 10, 10)
-            self.GroupSpace(0, 10)
-
-            self.cl_add_combo_box(ID_CMB_VARS)
-            self.cl_add_combo_box(ID_CMB_OPTS)
-            self.cl_add_combo_box(ID_CMB_VIEWS)
-            self.cl_add_combo_box(ID_CMB_CONSTS)
-
+            self.AddButton(
+                ID_BTN_REFRESH, BF_L, name="Refresh Scene", initw=140, inith=12
+            )
             self.AddStaticText(
                 ID_STR_COMBO_COUNT,
                 BF_RS,
                 name="00000 / 00000 Combinations",  # replaced in InitValues()
                 borderstyle=c4d.BORDER_WITH_TITLE_BOLD,
             )
+        self.GroupEnd()
+
+    # ---- Tabs ---------------------------------------------------------
+
+    def cl_group_tab_setup(self) -> None:
+        if self.GroupBegin(ID_GRP_TAB_SETUP, BF_SFT, cols=1, title=" 1. Setup "):
+            self.GroupSpace(0, 10)
+            self.GroupBorderSpace(0, 8, 0, 0)
+
+            self.cl_group_general_settings()
+            self.cl_group_components()
+            self.cl_group_preview_tools()
+        self.GroupEnd()
+
+    def cl_group_tab_output(self) -> None:
+        if self.GroupBegin(ID_GRP_TAB_OUTPUT, BF_SFT, cols=1, title=" 2. Output "):
+            self.GroupSpace(0, 10)
+            self.GroupBorderSpace(0, 8, 0, 0)
+
+            self.cl_group_render_parameters()
+        self.GroupEnd()
+
+    def cl_group_tab_rules(self) -> None:
+        if self.GroupBegin(ID_GRP_TAB_RULES, BF_SFSF, cols=1, title=" 3. Rules "):
+            self.GroupSpace(0, 10)
+            self.GroupBorderSpace(0, 8, 0, 0)
+
+            self.cl_group_exceptions()
+        self.GroupEnd()
+
+    def cl_group_tab_render(self) -> None:
+        if self.GroupBegin(ID_GRP_RENDER, BF_SFSF, cols=1, title=" 4. Render "):
+            self.GroupSpace(0, 10)
+            self.GroupBorderSpace(0, 8, 0, 0)
+
+            self.cl_group_render_options()
+            self.cl_group_file_structure_preview()
+        self.GroupEnd()
+
+    # ---- Setup tab groups ----------------------------------------------
+
+    def cl_group_general_settings(self) -> None:
+        if self.GroupBegin(NO_ID, BF_SF, title="Product", cols=1):
+            self.GroupBorder(c4d.BORDER_WITH_TITLE_BOLD)
+            self.GroupBorderSpace(10, 5, 10, 10)
+            self.GroupSpace(0, 6)
+
+            if self.GroupBegin(NO_ID, BF_SF, cols=2, rows=1):
+                self.GroupSpace(5, 0)
+                self.AddStaticText(NO_ID, BF_L, name="Product Name")
+                self.AddEditText(ID_STR_PRODUCT_NAME, BF_SF)
+            self.GroupEnd()
+
+            self.AddButton(
+                ID_BTN_INIT_HIERARCHY,
+                BF_SF,
+                name="Set Up Project Hierarchy",
+                inith=10,
+            )
+            self.AddStaticText(
+                NO_ID,
+                BF_L,
+                name="Creates BR_VARIABLES / BR_CAMERAS / BR_CONSTANTS groups in the Object Manager.",
+            )
+        self.GroupEnd()  # Settings
+
+    def cl_group_components(self, idx_var: int = 0) -> None:
+        if self.GroupBegin(ID_GRP_COMPONENT, BF_SF, cols=1, title="Scene Components"):
+            self.GroupBorder(c4d.BORDER_WITH_TITLE_BOLD)
+            self.GroupBorderSpace(10, 5, 10, 10)
+            self.GroupSpace(0, 10)
+
+            self.AddStaticText(
+                NO_ID,
+                BF_L,
+                name="Items found in your scene. Press Refresh Scene after changing objects.",
+            )
+
+            self.cl_add_combo_box(ID_CMB_VARS)
+            self.cl_add_combo_box(ID_CMB_OPTS)
+            self.cl_add_combo_box(ID_CMB_VIEWS)
+            self.cl_add_combo_box(ID_CMB_CONSTS)
         self.GroupEnd()  # Components
+
+    def cl_group_preview_tools(self) -> None:
+        if self.GroupBegin(NO_ID, BF_SF, cols=1, title="Preview Tools"):
+            self.GroupBorder(c4d.BORDER_WITH_TITLE_BOLD)
+            self.GroupBorderSpace(10, 5, 10, 10)
+
+            if self.GroupBegin(NO_ID, BF_SF, cols=2, rows=1):
+                self.AddButton(
+                    ID_BTN_RANDOMIZE,
+                    BF_SF,
+                    name="Show Random Combination",
+                    inith=10,
+                )
+                self.AddButton(
+                    ID_BTN_DEFAULT_VISIBILITY,
+                    BF_SF,
+                    name="Reset Default Visibility",
+                    inith=10,
+                )
+            self.GroupEnd()
+        self.GroupEnd()
 
     def cl_add_combo_box(
         self,
@@ -488,8 +569,10 @@ class BrandnerDialog(c4d.gui.GeDialog):
             )
         self.GroupEnd()
 
+    # ---- Output tab groups ----------------------------------------------
+
     def cl_group_render_parameters(self) -> None:
-        if self.GroupBegin(NO_ID, BF_SF, cols=1, title="Render Parameters"):
+        if self.GroupBegin(NO_ID, BF_SF, cols=1, title="File Naming & Output"):
             self.GroupBorder(c4d.BORDER_WITH_TITLE_BOLD)
             self.GroupBorderSpace(10, 5, 10, 10)
             self.GroupSpace(0, 10)
@@ -513,13 +596,13 @@ class BrandnerDialog(c4d.gui.GeDialog):
         if self.GroupBegin(NO_ID, BF_SF, cols=3):  # Dir/Filename
             self.GroupSpace(5, 10)
 
-            self.AddStaticText(NO_ID, BF_L, name="Directory")
+            self.AddStaticText(NO_ID, BF_L, name="Output Folder")
             self.AddEditText(ID_STR_DIR_OUT, BF_SF)
-            self.AddButton(ID_BTN_OUT_DIR, BF_R, name="...")
+            self.AddButton(ID_BTN_OUT_DIR, BF_R, name="Browse...")
 
-            self.AddStaticText(NO_ID, BF_L, name="Filename")
+            self.AddStaticText(NO_ID, BF_L, name="Filename Pattern")
             self.AddEditText(ID_STR_FILENAME, BF_SF)
-            self.AddButton(ID_BTN_ADD_TOKEN, BF_R, name="...")
+            self.AddButton(ID_BTN_ADD_TOKEN, BF_R, name="+ Token")
 
             self.cl_render_parameters_filename_help()
         self.GroupEnd()
@@ -534,36 +617,20 @@ class BrandnerDialog(c4d.gui.GeDialog):
 
         self.AddStaticText(ID_TXT_TOKEN_HELP_TT, BF_R, name=" " * 10)
 
-    def cl_group_render_buttons(self) -> None:
-        if self.GroupBegin(NO_ID, BF_SF, cols=1):
-            self.GroupBorderSpace(10, 0, 10, 10)
+    # ---- Render tab groups ----------------------------------------------
+
+    def cl_group_render_options(self) -> None:
+        if self.GroupBegin(NO_ID, BF_SF, cols=1, title="Render Settings"):
+            self.GroupBorder(c4d.BORDER_WITH_TITLE_BOLD)
+            self.GroupBorderSpace(10, 5, 10, 10)
             self.GroupSpace(0, 10)
 
-            self.cl_group_render_buttons_preview()
-            self.cl_group_render_buttons_options()
-
-            self.AddButton(ID_BTN_RENDER, BF_SF, name=" ", inith=20)
+            self.cl_group_combobox_render_mode()
+            self.cl_group_render_extras()
         self.GroupEnd()
 
-    def cl_group_render_buttons_preview(self) -> None:
-        if self.GroupBegin(NO_ID, BF_SF, rows=1):
-            self.AddButton(
-                ID_BTN_WRITE_CSV, BF_SF, name="Export CSV Only"
-            )
-            self.AddStaticText(NO_ID, BF_SF, name="", initw=10)  # spacer
-            self.AddButton(
-                ID_BTN_RANDOMIZE, BF_SF, name="Random Combination", inith=10
-            )
-            self.AddButton(
-                ID_BTN_DEFAULT_VISIBILITY,
-                BF_SF,
-                name="Default Visibility",
-                inith=10,
-            )
-        self.GroupEnd()
-
-    def cl_group_render_buttons_options(self) -> None:
-        if self.GroupBegin(NO_ID, BF_SF, rows=1):
+    def cl_group_render_extras(self) -> None:
+        if self.GroupBegin(NO_ID, BF_SF, cols=3, rows=1):
             self.GroupSpace(20, 0)
 
             self.AddCheckbox(
@@ -580,8 +647,7 @@ class BrandnerDialog(c4d.gui.GeDialog):
                 initw=0,
                 inith=0,
             )
-
-            self.cl_group_combobox_render_mode()
+            self.AddButton(ID_BTN_WRITE_CSV, BF_RS, name="Export CSV Only")
         self.GroupEnd()
 
     def cl_group_combobox_render_mode(self) -> None:
@@ -607,8 +673,10 @@ class BrandnerDialog(c4d.gui.GeDialog):
         self.GroupEnd()
 
 
+    # ---- Rules tab groups -----------------------------------------------
+
     def cl_group_exceptions(self) -> None:
-        title = "Exceptions"
+        title = "Exclusion Rules"
         if self.GroupBegin(NO_ID, BF_SFSF, cols=1, title=title):
             self.GroupBorder(c4d.BORDER_WITH_TITLE_BOLD)
             self.GroupBorderSpace(10, 5, 10, 10)
@@ -780,7 +848,7 @@ class BrandnerDialog(c4d.gui.GeDialog):
     def update_cameras_combo_box(self) -> None:
         self.update_combo_box_component(
             ID_CMB_VIEWS,
-            "Views",
+            "Cameras",
             self.cameras_combobox,
         )
 
@@ -983,22 +1051,22 @@ class BrandnerDialog(c4d.gui.GeDialog):
             if len(self.variables) == 0:
                 self.SetString(
                     ID_BTN_RENDER,
-                    "Please add a variable and press Refresh",
+                    "Please add a variable and press Refresh Scene",
                 )
             elif len(self.cameras) == 0:
                 self.SetString(
                     ID_BTN_RENDER,
-                    "Please add a camera and press Refresh",
+                    "Please add a camera and press Refresh Scene",
                 )
             elif raw_total > 0:
                 self.SetString(
                     ID_BTN_RENDER,
-                    f"All {raw_total} combinations excluded by rules — check Exceptions tab",
+                    f"All {raw_total} combinations excluded by rules — check the Rules tab",
                 )
             else:
                 self.SetString(
                     ID_BTN_RENDER,
-                    "No combinations — add options to each variable and press Refresh",
+                    "No combinations — add options to each variable and press Refresh Scene",
                 )
         else:
             self.SetString(
