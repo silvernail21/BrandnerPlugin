@@ -94,6 +94,8 @@ ID_BTN_ADD_TOKEN = 1005
 ID_BTN_INIT_HIERARCHY = 1006
 ID_BTN_REFRESH = 1007
 ID_BTN_WRITE_CSV = 1008
+ID_BTN_COMBO_PREV = 1009
+ID_BTN_COMBO_NEXT = 1010
 
 ID_TGRP_TABS = 2000
 ID_GRP_RENDER = 2001
@@ -120,6 +122,7 @@ ID_STR_CONSTS_WARN = ID_CMB_CONSTS + OFFSET_WARN
 
 ID_STR_COMBO_COUNT = 2190
 ID_STR_SCENE_WARNINGS = 2191
+ID_STR_COMBO_POS = 2192
 
 ID_FILE_STRUCTURE_LIST = 2300
 ID_TXT_TOKEN_HELP = 2301
@@ -165,6 +168,8 @@ IDS_PARAMETERS_STRING = [
 
 IDS_DISABLE_ALL = [
     ID_BTN_RANDOMIZE,
+    ID_BTN_COMBO_PREV,
+    ID_BTN_COMBO_NEXT,
     ID_BTN_DEFAULT_VISIBILITY,
     ID_BTN_OUT_DIR,
     ID_BTN_ADD_TOKEN,
@@ -188,6 +193,8 @@ IDS_DISABLE_ALL = [
 
 IDS_ENABLE_ALL = [
     ID_BTN_RANDOMIZE,
+    ID_BTN_COMBO_PREV,
+    ID_BTN_COMBO_NEXT,
     ID_BTN_DEFAULT_VISIBILITY,
     ID_BTN_OUT_DIR,
     ID_BTN_ADD_TOKEN,
@@ -248,6 +255,8 @@ class BrandnerDialog(c4d.gui.GeDialog):
         self._scene_cache: Dict[str, Dict] = {}
         self._combos_dirty: bool = True
         self._raw_combo_count: int = 0
+        self._preview_combo_idx: Optional[int] = None
+        self._preview_cache_key: Optional[tuple] = None
 
         self.init_component_names()
         self.possible_combinations = self.calculate_combinations()
@@ -541,6 +550,19 @@ class BrandnerDialog(c4d.gui.GeDialog):
         if self.GroupBegin(NO_ID, BF_SF, cols=1, title="Preview Tools"):
             self.GroupBorder(c4d.BORDER_WITH_TITLE_BOLD)
             self.GroupBorderSpace(10, 5, 10, 10)
+            self.GroupSpace(0, 6)
+
+            # Step through every valid combination in the viewport
+            if self.GroupBegin(NO_ID, BF_SF, cols=3, rows=1):
+                self.GroupSpace(5, 0)
+                self.AddButton(ID_BTN_COMBO_PREV, BF_L, name="< Prev", initw=80)
+                self.AddStaticText(
+                    ID_STR_COMBO_POS,
+                    BF_SF | c4d.BFV_CENTER,
+                    name="Combination - of -",
+                )
+                self.AddButton(ID_BTN_COMBO_NEXT, BF_R, name="Next >", initw=80)
+            self.GroupEnd()
 
             if self.GroupBegin(NO_ID, BF_SF, cols=2, rows=1):
                 self.AddButton(
@@ -769,6 +791,7 @@ class BrandnerDialog(c4d.gui.GeDialog):
         self.SetString(ID_BCB_EXCLUSION_RULES_RAW, rules_raw)
 
         self.update_warnings()
+        self._update_combo_pos_label()
 
         return True
 
@@ -793,6 +816,7 @@ class BrandnerDialog(c4d.gui.GeDialog):
         self.update_component_combo_boxes()
         self.enable_render_buttons()
         self.update_warnings()
+        self._update_combo_pos_label()
 
     # ------------------------------------------------------------------
     # Warnings (duplicate names / filename collisions / stale rules)
@@ -1092,15 +1116,33 @@ class BrandnerDialog(c4d.gui.GeDialog):
             return
 
         filename = self.bcb.GetString(ID_BCB_FILENAME)
+
+        self.ensure_combinations()
+        combos = self.possible_combinations
+
+        # Building the preview clones the whole scene — skip it when nothing
+        # it depends on has changed. cmd_refresh clears the key to force a
+        # rebuild on explicit refresh.
+        cache_key = (
+            filename,
+            self.bcb.GetString(ID_BCB_PREFIX),
+            self.bcb.GetString(ID_BCB_DELIMITER),
+            self.bcb.GetString(ID_BCB_PRODUCT_NAME),
+            self.bcb.GetString(ID_BCB_DIRECTORY_OUTPUT),
+            len(combos),
+            tuple(tuple(c) for c in combos[:3]),  # preview shows first 3
+            tuple(self.get_camera_names()),
+        )
+        if cache_key == self._preview_cache_key:
+            return
+        self._preview_cache_key = cache_key
+
         token_names = token_path_to_token_names(filename)
         preview_text = token_names + "\n"
 
         for _warning in self._check_filename_collision_warnings():
             preview_text += f"⚠ {_warning}\n"
         preview_text += "\n"
-
-        self.ensure_combinations()
-        combos = self.possible_combinations
 
         if not combos:
             rd = doc_src.GetActiveRenderData().GetClone()
@@ -1484,6 +1526,10 @@ class BrandnerDialog(c4d.gui.GeDialog):
     def Command(self, id, msg):
         if id == ID_BTN_RENDER:
             self.cmd_render()
+        elif id == ID_BTN_COMBO_PREV:
+            self.cmd_step_combination(-1)
+        elif id == ID_BTN_COMBO_NEXT:
+            self.cmd_step_combination(1)
         elif id == ID_BTN_RANDOMIZE:
             self.cmd_randomize_visibility()
         elif id == ID_BTN_DEFAULT_VISIBILITY:
@@ -1780,12 +1826,10 @@ class BrandnerDialog(c4d.gui.GeDialog):
             except Exception:
                 pass
 
-    def cmd_randomize_visibility(self) -> None:
-        """
-        Show a single random *valid* combination, respecting exclusion rules.
+    def _apply_combination(self, combo: List[str]) -> None:
+        """Show one combination in the viewport (with undo).
 
-        It uses self.possible_combinations, which already applies
-        parse_exclusion_rules + is_valid_combo_names.
+        combo: [opt_var1_name, opt_var2_name, ..., camera_name]
         """
         doc = c4d.documents.GetActiveDocument()
         if doc is None:
@@ -1795,15 +1839,6 @@ class BrandnerDialog(c4d.gui.GeDialog):
         null_cameras = doc.SearchObject(BR_CAMERAS)
         if null_variables is None or null_cameras is None:
             return
-
-        # Make sure we have up-to-date valid combos
-        self.ensure_combinations()
-        if not self.possible_combinations:
-            # Nothing valid to show
-            return
-
-        # Pick one valid combo: [opt_var1_name, opt_var2_name, ..., camera_name]
-        combo = random.choice(self.possible_combinations)
 
         doc.StartUndo()
 
@@ -1829,6 +1864,58 @@ class BrandnerDialog(c4d.gui.GeDialog):
 
         doc.EndUndo()
         c4d.EventAdd()
+
+    def _update_combo_pos_label(self) -> None:
+        num_combos = len(self.possible_combinations)
+        idx = getattr(self, "_preview_combo_idx", None)
+        if idx is not None and idx >= num_combos:
+            # Combo list changed (rules/scene edit) — stored position is stale.
+            idx = None
+            self._preview_combo_idx = None
+        if num_combos == 0:
+            self.SetString(ID_STR_COMBO_POS, "Combination - of 0")
+        elif idx is None:
+            self.SetString(ID_STR_COMBO_POS, f"Combination - of {num_combos}")
+        else:
+            self.SetString(
+                ID_STR_COMBO_POS, f"Combination {idx + 1} of {num_combos}"
+            )
+
+    def cmd_step_combination(self, step: int) -> None:
+        """Show the previous/next valid combination in the viewport."""
+        self.ensure_combinations()
+        num_combos = len(self.possible_combinations)
+        if num_combos == 0:
+            self._preview_combo_idx = None
+            self._update_combo_pos_label()
+            return
+
+        idx = getattr(self, "_preview_combo_idx", None)
+        if idx is None:
+            # First step: Next shows the first combo, Prev shows the last.
+            idx = 0 if step >= 0 else num_combos - 1
+        else:
+            idx = (idx + step) % num_combos
+
+        self._preview_combo_idx = idx
+        self._apply_combination(self.possible_combinations[idx])
+        self._update_combo_pos_label()
+
+    def cmd_randomize_visibility(self) -> None:
+        """
+        Show a single random *valid* combination, respecting exclusion rules.
+
+        It uses self.possible_combinations, which already applies
+        parse_exclusion_rules + is_valid_combo_names.
+        """
+        self.ensure_combinations()
+        if not self.possible_combinations:
+            return
+
+        idx = random.randrange(len(self.possible_combinations))
+        self._preview_combo_idx = idx
+        self._apply_combination(self.possible_combinations[idx])
+        self._update_combo_pos_label()
 
     @staticmethod
     def cmd_default_visibility() -> None:
@@ -1927,6 +2014,7 @@ class BrandnerDialog(c4d.gui.GeDialog):
 
         self.init_component_names()
         self._combos_dirty = True
+        self._preview_cache_key = None  # force preview rebuild on explicit refresh
         self.ensure_combinations()
 
         self.InitValues()
