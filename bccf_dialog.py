@@ -1473,6 +1473,27 @@ class BrandnerDialog(c4d.gui.GeDialog):
         except Exception as e:
             logging.error(f"Failed to write CSV: {e}")
 
+    @staticmethod
+    def set_stage_as_render_camera(doc: c4d.documents.BaseDocument) -> None:
+        """Link BR_STAGE as the scene camera of the baked document.
+
+        The Render Queue's per-job Camera setting is not exposed in the
+        Python API, but it defaults to the camera the scene file was saved
+        with. jump_to_frame() lets the stage resolve to frame 1's concrete
+        camera, so without this the queue pins that single camera for the
+        whole job. Saving with the stage object linked instead makes the
+        queue follow the stage's per-frame camera switching by default.
+        """
+        obj_stage = doc.SearchObject(BR_STAGE)
+        if obj_stage is None:
+            return
+        for bd in (doc.GetRenderBaseDraw(), doc.GetActiveBaseDraw()):
+            if bd is not None:
+                try:
+                    bd.SetSceneCamera(obj_stage)
+                except Exception:
+                    pass
+
     def finalize_project_and_render(
         self,
         doc: c4d.documents.BaseDocument,
@@ -1481,6 +1502,7 @@ class BrandnerDialog(c4d.gui.GeDialog):
         do_save_project: Optional[bool] = None,
     ) -> bool:
         jump_to_frame(doc, BAKE_FRAME_OFFSET)
+        self.set_stage_as_render_camera(doc)
 
         if do_save_project is None:
             do_save_project = self.bcb[ID_BCB_DO_SAVE_PROJECT]
